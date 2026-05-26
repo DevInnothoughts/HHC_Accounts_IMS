@@ -57,7 +57,7 @@ const fileExists = (key) => key && fs.existsSync(path.join(UPLOAD_BASE, key));
 
 const validateFile = (file, options = {}) => {
   const {
-    maxSizeMB = 10,
+    maxSizeMB = 3,
     allowedTypes = ["image/jpeg", "image/png", "image/jpg", "application/pdf"],
   } = options;
   const errors = [];

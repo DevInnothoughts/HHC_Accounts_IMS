@@ -56,7 +56,7 @@ export default function FileUpload({
     }
 
     // Client-side validation
-    const maxMB = 10;
+    const maxMB = 3;
     const allowedTypes = [
       "image/jpeg",
       "image/jpg",
@@ -306,7 +306,7 @@ export default function FileUpload({
                   {docTypes.find((d) => d.value === selectedDocType)?.label}
                 </strong>
               </div>
-              <div style={S.dropHint}>PDF, JPG, PNG · Max 10MB</div>
+              <div style={S.dropHint}>PDF, JPG, PNG · Max 3MB</div>
             </div>
           )}
         </div>
