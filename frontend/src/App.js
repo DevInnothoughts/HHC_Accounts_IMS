@@ -34,7 +34,7 @@ const ProtectedRoute = ({ children, roles }) => {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      <BrowserRouter basename="/hhc">
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />
