@@ -8,7 +8,7 @@ module.exports = {
   output: {
     path: path.resolve(__dirname, "dist"),
     filename: "bundle.js",
-    publicPath: "/", // ✅ this line must be here
+    publicPath: "/hhc/", // ✅ this line must be here
     clean: true,
   },
   module: {
