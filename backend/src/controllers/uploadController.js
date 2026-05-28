@@ -7,6 +7,8 @@ const {
 const { logAction } = require("../services/auditService");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const Vendor = require("../models/Vendor");
+const vision = require("@google-cloud/vision");
+const client = new vision.ImageAnnotatorClient();
 
 // ── Invoice / Payment Attachment ──────────────────────────
 exports.uploadPaymentAttachment = async (req, res) => {
@@ -160,6 +162,52 @@ exports.deleteVendorDocument = async (req, res) => {
 
     res.json({ message: "Document deleted" });
   } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// POST /api/ai/parse-cheque
+// Body: multipart — file (cheque image)
+exports.parseCheque = async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+
+    const [result] = await client.textDetection({
+      image: { content: req.file.buffer.toString("base64") },
+    });
+
+    const text = result.textAnnotations?.[0]?.description || "";
+
+    // Extract bank details from raw text using regex
+    const ifscMatch = text.match(/[A-Z]{4}0[A-Z0-9]{6}/);
+    const accountMatch = text.match(/\b\d{9,18}\b/);
+    const micrMatch = text.match(/\b\d{9}\b/);
+
+    if (!ifscMatch && !accountMatch) {
+      return res.status(422).json({
+        message: "Could not read cheque clearly. Please fill manually.",
+      });
+    }
+
+    // Extract bank name from first few lines
+    const lines = text.split("\n").filter((l) => l.trim());
+    const bankName =
+      lines.find((l) => /bank|finance|credit|cooperative/i.test(l)) || "";
+
+    const accountHolderName = lines[0] || "";
+
+    res.json({
+      success: true,
+      bankDetails: {
+        accountHolderName: accountHolderName.trim(),
+        bankName: bankName.trim(),
+        accountNumber: accountMatch?.[0] || "",
+        ifscCode: ifscMatch?.[0] || "",
+        micrCode: micrMatch?.[0] || "",
+      },
+    });
+  } catch (err) {
+    console.error("Cheque parse error:", err);
     res.status(500).json({ message: err.message });
   }
 };

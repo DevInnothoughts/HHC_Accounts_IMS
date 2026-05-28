@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { ROLES, INVOICE_WORKFLOW } from "../config/constants.js";
 
 const STATUS_STYLES = {
   Draft: { bg: "#f1f5f9", color: "#475569", icon: "📝" },
@@ -38,7 +39,52 @@ export default function InvoiceRequests() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState({ status: "", priority: "" });
+  const [filters, setFilters] = useState({
+    status: "",
+    priority: "",
+    branch: "",
+  });
+  const [branches, setBranches] = useState([]);
+  const [actionLoading, setActionLoading] = useState("");
+
+  const handleQuickApprove = async (e, invoiceId) => {
+    e.stopPropagation(); // prevent row click navigation
+    setActionLoading(`approve_${invoiceId}`);
+    try {
+      await api.patch(`/invoices/${invoiceId}/approve`, { remarks: "" });
+      fetchInvoices();
+    } catch (err) {
+      alert(err.response?.data?.message || "Approval failed");
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  const handleQuickReject = async (e, invoiceId) => {
+    e.stopPropagation();
+    const reason = window.prompt("Rejection reason (required):");
+    if (!reason?.trim()) return;
+    setActionLoading(`reject_${invoiceId}`);
+    try {
+      await api.patch(`/invoices/${invoiceId}/reject`, { reason });
+      fetchInvoices();
+    } catch (err) {
+      alert(err.response?.data?.message || "Rejection failed");
+    } finally {
+      setActionLoading("");
+    }
+  };
+
+  useEffect(() => {
+    if (["accounts", "super_admin", "cluster_head"].includes(user?.role)) {
+      api
+        .get("/branches?limit=100&all=true")
+        .then((r) =>
+          setBranches(Array.isArray(r.data) ? r.data : r.data.branches || []),
+        )
+        .catch(console.error);
+    }
+  }, [user]);
 
   const fetchInvoices = useCallback(async () => {
     setLoading(true);
@@ -111,10 +157,29 @@ export default function InvoiceRequests() {
               </option>
             ))}
           </select>
+          {[ROLES.ACCOUNTS, ROLES.SUPER_ADMIN, ROLES.CLUSTER_HEAD].includes(
+            user?.role,
+          ) && (
+            <select
+              style={S.select}
+              value={filters.branch}
+              onChange={(e) => {
+                setFilters((f) => ({ ...f, branch: e.target.value }));
+                setPage(1);
+              }}
+            >
+              <option value="">All Branches</option>
+              {branches.map((b) => (
+                <option key={b._id} value={b._id}>
+                  {b.name} {b.code ? `(${b.code})` : ""}
+                </option>
+              ))}
+            </select>
+          )}
           <button
             style={S.resetBtn}
             onClick={() => {
-              setFilters({ status: "", priority: "" });
+              setFilters({ status: "", priority: "", branch: "" });
               setPage(1);
             }}
           >
@@ -150,6 +215,7 @@ export default function InvoiceRequests() {
                     "Priority",
                     "Status",
                     "Date",
+                    "",
                   ].map((h) => (
                     <th key={h} style={S.th}>
                       {h}
@@ -207,6 +273,87 @@ export default function InvoiceRequests() {
                       </td>
                       <td style={{ ...S.td, color: "#94a3b8", fontSize: 12 }}>
                         {new Date(inv.createdAt).toLocaleDateString("en-GB")}
+                      </td>
+                      <td
+                        style={{ ...S.td, textAlign: "right" }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {(() => {
+                          const currentStep = INVOICE_WORKFLOW.find(
+                            (w) => w.status === inv.status,
+                          );
+                          const isMyTurn =
+                            currentStep?.actingRole === user?.role;
+                          if (!isMyTurn) return null;
+                          const showApprove = user?.role !== "accounts";
+                          if (!isMyTurn) return null;
+                          const approveLoading =
+                            actionLoading === `approve_${inv._id}`;
+                          const rejectLoading =
+                            actionLoading === `reject_${inv._id}`;
+                          return (
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: 6,
+                                justifyContent: "flex-end",
+                              }}
+                            >
+                              {showApprove && (
+                                <button
+                                  title="Quick Approve"
+                                  style={{
+                                    width: 32,
+                                    height: 32,
+                                    borderRadius: 8,
+                                    border: "1px solid #bbf7d0",
+                                    background: "#f0fdf4",
+                                    color: "#16a34a",
+                                    cursor: approveLoading
+                                      ? "not-allowed"
+                                      : "pointer",
+                                    fontSize: 16,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    opacity: approveLoading ? 0.5 : 1,
+                                    fontWeight: 700,
+                                  }}
+                                  disabled={approveLoading || rejectLoading}
+                                  onClick={(e) =>
+                                    handleQuickApprove(e, inv._id)
+                                  }
+                                >
+                                  {approveLoading ? "⏳" : "✓"}
+                                </button>
+                              )}
+                              <button
+                                title="Quick Reject"
+                                style={{
+                                  width: 32,
+                                  height: 32,
+                                  borderRadius: 8,
+                                  border: "1px solid #fecaca",
+                                  background: "#fef2f2",
+                                  color: "#dc2626",
+                                  cursor: rejectLoading
+                                    ? "not-allowed"
+                                    : "pointer",
+                                  fontSize: 16,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  opacity: rejectLoading ? 0.5 : 1,
+                                  fontWeight: 700,
+                                }}
+                                disabled={approveLoading || rejectLoading}
+                                onClick={(e) => handleQuickReject(e, inv._id)}
+                              >
+                                {rejectLoading ? "⏳" : "✗"}
+                              </button>
+                            </div>
+                          );
+                        })()}
                       </td>
                     </tr>
                   );

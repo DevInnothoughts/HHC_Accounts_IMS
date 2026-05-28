@@ -85,9 +85,12 @@ export default function InvoiceDetail() {
   );
   const submitBlocked = canSubmit && missingRequiredDocs.length > 0;
 
+  // ✅ Accounts can approve Submitted invoices when partner was skipped
+  const partnerSkipped =
+    invoice?.partnerSkipped && invoice?.status === "Submitted";
   const canApprove =
-    isMyTurn &&
-    !["Draft", "Rejected", "Cluster Head Approved"].includes(invoice?.status);
+    !["Draft", "Rejected", "Cluster Head Approved"].includes(invoice?.status) &&
+    (isMyTurn || (isAccounts && partnerSkipped));
   // ✅ This is already correct — isMyTurn handles role matching via INVOICE_WORKFLOW
   const canReject = canApprove;
 
@@ -344,6 +347,31 @@ export default function InvoiceDetail() {
               </div>
             </div>
           )}
+
+        {/* Partner skipped banner */}
+        {invoice.partnerSkipped && (
+          <div
+            style={{
+              background: "#fffbeb",
+              border: "1.5px solid #fde68a",
+              borderRadius: 10,
+              padding: "12px 18px",
+              marginBottom: 16,
+              display: "flex",
+              gap: 12,
+              alignItems: "center",
+              fontSize: 13,
+              color: "#92400e",
+            }}
+          >
+            <span style={{ fontSize: 20 }}>⚡</span>
+            <div>
+              <strong>Partner step skipped</strong> — No branch partner is
+              assigned to this branch. Invoice was routed directly to accounts
+              team.
+            </div>
+          </div>
+        )}
 
         {/* Progress bar */}
         <div style={S.progressCard}>

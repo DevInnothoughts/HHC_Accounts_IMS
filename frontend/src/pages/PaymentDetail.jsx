@@ -10,6 +10,7 @@ const STATUS_STYLES = {
   "Payment Raised": { bg: "#eff6ff", color: "#2563eb", icon: "📤" },
   "Accounts Approved": { bg: "#f0fdf4", color: "#16a34a", icon: "✅" },
   "Excel Generated": { bg: "#f0fdf4", color: "#15803d", icon: "📊" },
+  "Payment Processed": { bg: "#f0fdf4", color: "#166534", icon: "✅" },
   "Payment Rejected": { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
@@ -24,6 +25,24 @@ export default function PaymentDetail() {
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [utrModal, setUtrModal] = useState(false);
+  const [utrInput, setUtrInput] = useState("");
+  const [utrSubmitting, setUtrSubmitting] = useState(false);
+
+  const handleRecordUTR = async () => {
+    if (!utrInput.trim()) return;
+    setUtrSubmitting(true);
+    try {
+      await api.patch(`/payments/${id}/utr`, { utrNumber: utrInput.trim() });
+      setUtrModal(false);
+      setUtrInput("");
+      fetchPayment();
+    } catch (err) {
+      setError(err.response?.data?.message || "Failed to record UTR");
+    } finally {
+      setUtrSubmitting(false);
+    }
+  };
 
   const fetchPayment = async () => {
     try {
@@ -46,6 +65,7 @@ export default function PaymentDetail() {
   const canExcel =
     isAccounts &&
     ["Accounts Approved", "Excel Generated"].includes(payment?.status);
+  const canUTR = isAccounts && payment?.status === "Excel Generated";
 
   const handleApprove = async () => {
     setSubmitting(true);
@@ -169,6 +189,17 @@ export default function PaymentDetail() {
                 📊 Generate Excel
               </button>
             )}
+            {canUTR && (
+              <button
+                style={{ ...S.excelBtn, background: "#166534" }}
+                onClick={() => {
+                  setUtrModal(true);
+                  setUtrInput("");
+                }}
+              >
+                🔢 Enter UTR
+              </button>
+            )}
           </div>
         </div>
 
@@ -226,6 +257,62 @@ export default function PaymentDetail() {
             </div>
           )}
 
+        {/* UTR Banner */}
+        {payment.status === "Payment Processed" && payment.utrNumber && (
+          <div
+            style={{
+              background: "#f0fdf4",
+              border: "1.5px solid #bbf7d0",
+              borderRadius: 12,
+              padding: "16px 20px",
+              marginBottom: 16,
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+            }}
+          >
+            <span style={{ fontSize: 28 }}>✅</span>
+            <div style={{ flex: 1 }}>
+              <div
+                style={{
+                  fontWeight: 700,
+                  color: "#166534",
+                  fontSize: 15,
+                  marginBottom: 4,
+                }}
+              >
+                Payment Processed Successfully
+              </div>
+              <div style={{ fontSize: 13, color: "#475569" }}>
+                UTR Number:{" "}
+                <span
+                  style={{
+                    fontFamily: "monospace",
+                    fontWeight: 700,
+                    color: "#166534",
+                    background: "#dcfce7",
+                    padding: "2px 10px",
+                    borderRadius: 6,
+                    fontSize: 14,
+                  }}
+                >
+                  {payment.utrNumber}
+                </span>
+              </div>
+              {payment.utrRecordedAt && (
+                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+                  Recorded on:{" "}
+                  {new Date(payment.utrRecordedAt).toLocaleDateString("en-GB", {
+                    day: "2-digit",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         <div style={S.grid}>
           {/* Payment Details */}
           <InfoCard title="💳 Payment Details">
@@ -245,6 +332,9 @@ export default function PaymentDetail() {
               }
             />
             <InfoRow label="Remarks" value={payment.paymentRemarks || "—"} />
+            {payment.utrNumber && (
+              <InfoRow label="UTR Number" value={payment.utrNumber} mono />
+            )}
           </InfoCard>
 
           {/* Invoice Summary */}
@@ -450,6 +540,85 @@ export default function PaymentDetail() {
                   disabled={submitting}
                 >
                   {submitting ? "Rejecting..." : "✗ Confirm Reject"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* UTR Modal */}
+        {utrModal && (
+          <div style={S.overlay}>
+            <div style={S.modal}>
+              <h3 style={S.modalTitle}>🔢 Record UTR Number</h3>
+              <p style={{ fontSize: 14, color: "#475569", marginBottom: 16 }}>
+                Payment <strong>{payment.paymentId}</strong> ·{" "}
+                <strong>
+                  ₹{payment.paymentAmount?.toLocaleString("en-IN")}
+                </strong>
+              </p>
+              <label
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#475569",
+                  display: "block",
+                  marginBottom: 6,
+                }}
+              >
+                UTR / Reference Number *
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. HDFC0000123456789"
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: 8,
+                  fontSize: 14,
+                  outline: "none",
+                  boxSizing: "border-box",
+                  fontFamily: "monospace",
+                  marginBottom: 6,
+                }}
+                value={utrInput}
+                onChange={(e) => setUtrInput(e.target.value.toUpperCase())}
+                autoFocus
+              />
+              <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>
+                This will mark the payment as <strong>Payment Processed</strong>{" "}
+                and notify the branch user.
+              </p>
+              <div style={S.modalBtns}>
+                <button
+                  style={S.cancelBtn}
+                  onClick={() => {
+                    setUtrModal(false);
+                    setUtrInput("");
+                  }}
+                  disabled={utrSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{
+                    flex: 2,
+                    padding: "10px",
+                    border: "none",
+                    borderRadius: 8,
+                    background: utrInput.trim() ? "#166534" : "#94a3b8",
+                    color: "#fff",
+                    cursor: utrInput.trim() ? "pointer" : "not-allowed",
+                    fontWeight: 700,
+                    fontSize: 14,
+                    opacity: utrSubmitting ? 0.7 : 1,
+                  }}
+                  disabled={!utrInput.trim() || utrSubmitting}
+                  onClick={handleRecordUTR}
+                >
+                  {utrSubmitting
+                    ? "Recording..."
+                    : "✅ Confirm & Mark Processed"}
                 </button>
               </div>
             </div>

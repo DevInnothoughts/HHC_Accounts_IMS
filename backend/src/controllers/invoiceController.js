@@ -115,24 +115,55 @@ exports.submitInvoice = async (req, res) => {
       });
     }
 
-    invoice.status = INVOICE_STATUS.SUBMITTED;
-    invoice.currentStage = "partner"; // ✅ branch_partner acts first
-    await invoice.save();
-
-    await startSLATracking(invoice._id, INVOICE_STATUS.SUBMITTED);
-
-    // ✅ Notify branch_partner first
-    const partnerUsers = await User.find({
+    // ✅ Check if branch has any active branch_partner
+    const branchPartnerExists = await User.exists({
       role: ROLES.BRANCH_PARTNER,
+      branches: invoice.branch,
       status: "active",
     });
-    for (const u of partnerUsers) {
-      await sendNotificationEmail(
-        u.email,
-        `📋 New Invoice Request: ${invoice.requestId}`,
-        `<p>Invoice <strong>${invoice.requestId}</strong> has been submitted and requires your verification.</p>`,
-      ).catch(console.error);
+
+    if (branchPartnerExists) {
+      // ✅ Normal flow — goes to partner first
+      invoice.status = INVOICE_STATUS.SUBMITTED;
+      invoice.currentStage = "partner";
+      await invoice.save();
+
+      await startSLATracking(invoice._id, INVOICE_STATUS.SUBMITTED);
+
+      const partnerUsers = await User.find({
+        role: ROLES.BRANCH_PARTNER,
+        branches: invoice.branch,
+        status: "active",
+      });
+      for (const u of partnerUsers) {
+        await sendNotificationEmail(
+          u.email,
+          `📋 New Invoice Request: ${invoice.requestId}`,
+          `<p>Invoice <strong>${invoice.requestId}</strong> has been submitted and requires your verification.</p>`,
+        ).catch(console.error);
+      }
+    } else {
+      // ✅ No partner — skip directly to accounts
+      invoice.status = INVOICE_STATUS.SUBMITTED;
+      invoice.currentStage = "accounts";
+      invoice.partnerSkipped = true; // flag so UI can show this
+      await invoice.save();
+
+      await startSLATracking(invoice._id, "Partner Approved"); // use accounts SLA stage
+
+      const accountsUsers = await User.find({
+        role: ROLES.ACCOUNTS,
+        status: "active",
+      });
+      for (const u of accountsUsers) {
+        await sendNotificationEmail(
+          u.email,
+          `📋 New Invoice Request: ${invoice.requestId}`,
+          `<p>Invoice <strong>${invoice.requestId}</strong> has been submitted directly to accounts (no branch partner assigned).</p>`,
+        ).catch(console.error);
+      }
     }
+
     res.json(invoice);
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -147,7 +178,12 @@ exports.approveInvoice = async (req, res) => {
     );
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
-    if (!canActOnInvoice(req.user.role, invoice.status)) {
+    // ✅ Handle partner-skipped invoices — accounts can act on Submitted directly
+    const partnerSkipped =
+      invoice.partnerSkipped && invoice.status === INVOICE_STATUS.SUBMITTED;
+    const normalTurn = canActOnInvoice(req.user.role, invoice.status);
+
+    if (!normalTurn && !partnerSkipped) {
       const step = getWorkflowStep(invoice.status);
       return res.status(403).json({
         message: step
@@ -156,7 +192,14 @@ exports.approveInvoice = async (req, res) => {
       });
     }
 
-    const step = getWorkflowStep(invoice.status);
+    // For partner-skipped invoices, use accounts approval step
+    const step = partnerSkipped
+      ? {
+          label: "Accounts Approval (Partner Skipped)",
+          nextStatus: "Accounts Approved",
+          nextStage: "cluster_head",
+        }
+      : getWorkflowStep(invoice.status);
 
     // ✅ Accounts must provide TDS % when approving at their stage
     if (req.user.role === ROLES.ACCOUNTS) {

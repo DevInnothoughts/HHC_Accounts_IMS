@@ -724,3 +724,63 @@ exports.bulkGenerateExcel = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+// POST /api/payments/:id/utr
+// Body: { utrNumber }
+exports.recordUTR = async (req, res) => {
+  try {
+    const { utrNumber } = req.body;
+    if (!utrNumber?.trim())
+      return res.status(400).json({ message: "UTR number is required" });
+
+    const payment = await PaymentProcessing.findById(req.params.id)
+      .populate("invoiceRequest", "requestId")
+      .populate("vendor", "vendorName")
+      .populate("raisedBy", "email name");
+
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    if (payment.status !== "Excel Generated")
+      return res.status(400).json({
+        message: "UTR can only be recorded for Excel Generated payments",
+      });
+
+    payment.utrNumber = utrNumber.trim();
+    payment.utrRecordedAt = new Date();
+    payment.utrRecordedBy = req.user._id;
+    payment.status = "Payment Processed";
+    await payment.save();
+
+    // Notify branch user
+    if (payment.raisedBy?.email) {
+      const { sendNotificationEmail } = require("../services/emailService");
+      await sendNotificationEmail(
+        payment.raisedBy.email,
+        `✅ Payment Processed: ${payment.paymentId}`,
+        `
+          <p>Payment <strong>${payment.paymentId}</strong> has been processed.</p>
+          <table style="width:100%;border-collapse:collapse;margin-top:12px;">
+            <tr><td style="padding:6px;color:#666;">Payment ID</td><td style="padding:6px;font-weight:600;">${payment.paymentId}</td></tr>
+            <tr><td style="padding:6px;color:#666;">Vendor</td><td style="padding:6px;font-weight:600;">${payment.vendor?.vendorName}</td></tr>
+            <tr><td style="padding:6px;color:#666;">Amount</td><td style="padding:6px;font-weight:600;">₹${payment.paymentAmount?.toLocaleString("en-IN")}</td></tr>
+            <tr><td style="padding:6px;color:#666;">UTR Number</td><td style="padding:6px;font-weight:600;color:#16a34a;">${utrNumber}</td></tr>
+          </table>
+        `,
+      ).catch(console.error);
+    }
+
+    await logAction({
+      userId: req.user._id,
+      action: "RECORD_UTR",
+      module: "Payment",
+      targetId: payment._id,
+      newValue: { utrNumber },
+      req,
+    });
+
+    res.json(payment);
+  } catch (err) {
+    console.error("UTR record error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};

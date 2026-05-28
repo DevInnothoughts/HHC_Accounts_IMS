@@ -28,4 +28,10 @@ router.post(
   ctrl.bulkGenerateExcel,
 );
 
+router.patch(
+  "/:id/utr",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.recordUTR,
+);
+
 module.exports = router;

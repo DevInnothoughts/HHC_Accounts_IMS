@@ -44,6 +44,7 @@ const paymentProcessingSchema = new mongoose.Schema(
         "Payment Raised",
         "Accounts Approved",
         "Excel Generated",
+        "Payment Processed",
         "Payment Rejected",
       ],
       default: "Payment Pending",
@@ -56,6 +57,14 @@ const paymentProcessingSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+    // Add after excelGeneratedAt field
+    utrNumber: { type: String, trim: true, default: null },
+    utrRecordedAt: { type: Date, default: null },
+    utrRecordedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
     },
   },
   { timestamps: true },

@@ -33,13 +33,32 @@ export default function Vendors() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filters, setFilters] = useState({ status: "", category: "" });
+  const [filters, setFilters] = useState({
+    status: "",
+    category: "",
+    branch: "",
+  });
+  const [branches, setBranches] = useState([]);
   const [deleteModal, setDeleteModal] = useState(null);
   const [statusModal, setStatusModal] = useState(null);
   const [blacklistReason, setBlacklistReason] = useState("");
   const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
   const [approveModal, setApproveModal] = useState(null);
+
+  useEffect(() => {
+    if (["accounts", "super_admin", "cluster_head"].includes(user?.role)) {
+      api
+        .get("/branches?limit=100")
+        .then((r) => {
+          console.log("role:", user?.role, "branches response:", r.data);
+          const list = Array.isArray(r.data) ? r.data : r.data.branches || [];
+          console.log("branches list length:", list.length);
+          setBranches(list);
+        })
+        .catch(console.error);
+    }
+  }, [user]);
 
   const canManage = ["branch_user", "accounts", "super_admin"].includes(
     user?.role,
@@ -55,6 +74,7 @@ export default function Vendors() {
         ...(search && { search }),
         ...(filters.status && { status: filters.status }),
         ...(filters.category && { category: filters.category }),
+        ...(filters.branch && { branch: filters.branch }),
       });
       const { data } = await api.get(`/vendors?${params}`);
       setVendors(data.vendors);
@@ -155,6 +175,23 @@ export default function Vendors() {
               </option>
             ))}
           </select>
+          {["accounts", "super_admin", "cluster_head"].includes(user?.role) && (
+            <select
+              style={S.select}
+              value={filters.branch}
+              onChange={(e) => {
+                setFilters((f) => ({ ...f, branch: e.target.value }));
+                setPage(1);
+              }}
+            >
+              <option value="">All Branches</option>
+              {branches.map((b) => (
+                <option key={b._id} value={b._id}>
+                  {b.name} {b.code ? `(${b.code})` : ""}
+                </option>
+              ))}
+            </select>
+          )}
           <select
             style={S.select}
             value={filters.approvalStatus || ""}
@@ -172,7 +209,7 @@ export default function Vendors() {
             style={S.resetBtn}
             onClick={() => {
               setSearch("");
-              setFilters({ status: "", category: "" });
+              setFilters({ status: "", category: "", branch: "" });
               setPage(1);
             }}
           >

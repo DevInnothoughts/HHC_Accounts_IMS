@@ -48,25 +48,26 @@ const startServer = async () => {
     }),
   );
 
-  // Rate limiters
+  const isDev = process.env.NODE_ENV === "development";
+
   const otpLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 10,
+    max: isDev ? 1000 : 300,
     message: { message: "Too many OTP requests." },
   });
   const authLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 30,
+    max: isDev ? 1000 : 300,
     message: { message: "Too many auth requests." },
   });
   const uploadLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 50,
+    max: isDev ? 1000 : 500,
     message: { message: "Too many upload requests." },
   });
   const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 1000,
+    max: isDev ? 1000 : 3000,
     skip: () => process.env.NODE_ENV === "development",
   });
 

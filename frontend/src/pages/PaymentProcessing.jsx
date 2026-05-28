@@ -11,6 +11,7 @@ const STATUS_STYLES = {
   "Payment Raised": { bg: "#eff6ff", color: "#2563eb", icon: "📤" },
   "Accounts Approved": { bg: "#f0fdf4", color: "#16a34a", icon: "✅" },
   "Excel Generated": { bg: "#f0fdf4", color: "#15803d", icon: "📊" },
+  "Payment Processed": { bg: "#f0fdf4", color: "#166534", icon: "✅" },
   "Payment Rejected": { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
@@ -34,19 +35,30 @@ export default function PaymentProcessing() {
   const [selectedIds, setSelectedIds] = useState([]);
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [showBulkConfirm, setShowBulkConfirm] = useState(false);
+  const [utrModal, setUtrModal] = useState(null); // payment object
+  const [utrInput, setUtrInput] = useState("");
+  const [utrSubmitting, setUtrSubmitting] = useState(false);
+  const [processedPayments, setProcessedPayments] = useState([]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const [invRes, payRes] = await Promise.all([
+      const [invRes, payRes, processedRes] = await Promise.all([
         api.get("/payments/approved-invoices"),
         api.get("/payments"),
+        api.get("/payments?status=Payment Processed&limit=100"),
       ]);
       setInvoices(
         Array.isArray(invRes.data) ? invRes.data : invRes.data.invoices || [],
       );
-      setPayments(
-        Array.isArray(payRes.data) ? payRes.data : payRes.data.payments || [],
+      const allPayments = Array.isArray(payRes.data)
+        ? payRes.data
+        : payRes.data.payments || [];
+      setPayments(allPayments.filter((p) => p.status !== "Payment Processed"));
+      setProcessedPayments(
+        Array.isArray(processedRes.data)
+          ? processedRes.data
+          : processedRes.data.payments || [],
       );
     } catch (err) {
       console.error(err);
@@ -137,6 +149,23 @@ export default function PaymentProcessing() {
     );
   };
 
+  const handleRecordUTR = async () => {
+    if (!utrInput.trim()) return;
+    setUtrSubmitting(true);
+    try {
+      await api.patch(`/payments/${utrModal._id}/utr`, {
+        utrNumber: utrInput.trim(),
+      });
+      setUtrModal(null);
+      setUtrInput("");
+      fetchData();
+    } catch (err) {
+      alert(err.response?.data?.message || "Failed to record UTR");
+    } finally {
+      setUtrSubmitting(false);
+    }
+  };
+
   const handleBulkExcel = async () => {
     if (selectedIds.length === 0) return;
     setBulkGenerating(true);
@@ -199,6 +228,15 @@ export default function PaymentProcessing() {
             onClick={() => setTab("processing")}
           >
             💳 Payment Requests <span style={S.badge}>{payments.length}</span>
+          </button>
+          <button
+            style={{ ...S.tab, ...(tab === "processed" ? S.tabActive : {}) }}
+            onClick={() => setTab("processed")}
+          >
+            ✅ Payment Processed{" "}
+            {processedPayments.length > 0 && (
+              <span style={S.badge}>{processedPayments.length}</span>
+            )}
           </button>
         </div>
 
@@ -490,6 +528,22 @@ export default function PaymentProcessing() {
                                     📊 Excel
                                   </button>
                                 )}
+                                {pay.status === "Excel Generated" &&
+                                  isAccounts && (
+                                    <button
+                                      style={{
+                                        ...S.excelBtn,
+                                        background: "#166534",
+                                        fontSize: 12,
+                                      }}
+                                      onClick={() => {
+                                        setUtrModal(pay);
+                                        setUtrInput("");
+                                      }}
+                                    >
+                                      🔢 Enter UTR
+                                    </button>
+                                  )}
                               </div>
                             </td>
                           </tr>
@@ -508,6 +562,87 @@ export default function PaymentProcessing() {
               </div>
             )}
           </>
+        )}
+
+        {/* ── Tab 3: Payment Processed ─────────────── */}
+        {tab === "processed" && (
+          <div style={S.tableCard}>
+            <table style={S.table}>
+              <thead>
+                <tr style={S.thead}>
+                  {[
+                    "Payment ID",
+                    "Invoice",
+                    "Vendor",
+                    "Amount",
+                    "UTR Number",
+                    "Processed At",
+                    "Actions",
+                  ].map((h) => (
+                    <th key={h} style={S.th}>
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {processedPayments.map((pay) => (
+                  <tr key={pay._id} style={S.tr}>
+                    <td style={S.td}>
+                      <span style={S.reqId}>{pay.paymentId}</span>
+                    </td>
+                    <td style={S.td}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>
+                        {pay.invoiceRequest?.requestId || "—"}
+                      </div>
+                    </td>
+                    <td style={S.td}>{pay.vendor?.vendorName || "—"}</td>
+                    <td style={{ ...S.td, fontWeight: 600 }}>
+                      ₹{pay.paymentAmount?.toLocaleString("en-IN")}
+                    </td>
+                    <td style={S.td}>
+                      <span
+                        style={{
+                          fontFamily: "monospace",
+                          fontWeight: 700,
+                          color: "#166534",
+                          background: "#f0fdf4",
+                          padding: "3px 10px",
+                          borderRadius: 6,
+                          fontSize: 13,
+                        }}
+                      >
+                        {pay.utrNumber}
+                      </span>
+                    </td>
+                    <td style={{ ...S.td, color: "#64748b", fontSize: 12 }}>
+                      {pay.utrRecordedAt
+                        ? new Date(pay.utrRecordedAt).toLocaleDateString(
+                            "en-GB",
+                            { day: "2-digit", month: "short", year: "numeric" },
+                          )
+                        : "—"}
+                    </td>
+                    <td style={S.td}>
+                      <button
+                        style={S.viewBtn}
+                        onClick={() => navigate(`/payments/${pay._id}`)}
+                      >
+                        View
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {processedPayments.length === 0 && (
+                  <tr>
+                    <td colSpan={7} style={S.emptyCell}>
+                      No processed payments yet
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         )}
 
         {/* ── Raise Payment Modal ──────────────────────── */}
@@ -823,6 +958,97 @@ export default function PaymentProcessing() {
             </div>
           );
         })()}
+      {/* UTR Entry Modal */}
+      {utrModal && (
+        <div style={S.overlay}>
+          <div style={S.modal}>
+            <h3 style={S.modalTitle}>🔢 Record UTR Number</h3>
+            <p style={S.modalSub}>
+              Payment <strong>{utrModal.paymentId}</strong> ·{" "}
+              <strong>{utrModal.vendor?.vendorName}</strong>
+            </p>
+            <div
+              style={{
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 8,
+                padding: "10px 14px",
+                marginBottom: 16,
+                fontSize: 13,
+                color: "#475569",
+              }}
+            >
+              Amount:{" "}
+              <strong>
+                ₹{utrModal.paymentAmount?.toLocaleString("en-IN")}
+              </strong>
+            </div>
+            <label
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#475569",
+                display: "block",
+                marginBottom: 6,
+              }}
+            >
+              UTR / Reference Number *
+            </label>
+            <input
+              type="text"
+              placeholder="e.g. HDFC0000123456789"
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                fontSize: 14,
+                outline: "none",
+                boxSizing: "border-box",
+                fontFamily: "monospace",
+                marginBottom: 6,
+              }}
+              value={utrInput}
+              onChange={(e) => setUtrInput(e.target.value.toUpperCase())}
+              autoFocus
+            />
+            <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>
+              This will mark the payment as <strong>Payment Processed</strong>{" "}
+              and notify the branch user.
+            </p>
+            <div style={S.modalBtns}>
+              <button
+                style={S.cancelBtn}
+                onClick={() => {
+                  setUtrModal(null);
+                  setUtrInput("");
+                }}
+                disabled={utrSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                style={{
+                  flex: 2,
+                  padding: "10px",
+                  border: "none",
+                  borderRadius: 8,
+                  background: utrInput.trim() ? "#166534" : "#94a3b8",
+                  color: "#fff",
+                  cursor: utrInput.trim() ? "pointer" : "not-allowed",
+                  fontWeight: 700,
+                  fontSize: 14,
+                  opacity: utrSubmitting ? 0.7 : 1,
+                }}
+                disabled={!utrInput.trim() || utrSubmitting}
+                onClick={handleRecordUTR}
+              >
+                {utrSubmitting ? "Recording..." : "✅ Confirm & Mark Processed"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1151,6 +1377,16 @@ const S = {
     textTransform: "uppercase",
   },
   summaryValue: { fontSize: 22, fontWeight: 700, color: C.primary },
+  viewBtn: {
+    padding: "5px 12px",
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    borderRadius: 6,
+    color: "#2563eb",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
   bulkBar: {
     display: "flex",
     justifyContent: "space-between",

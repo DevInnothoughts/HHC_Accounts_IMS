@@ -72,6 +72,7 @@ const invoiceRequestSchema = new mongoose.Schema(
     approvalHistory: [approvalSchema],
     rejectionHistory: [rejectionSchema],
     tdsPercentage: { type: Number, default: null }, // ✅ Set by accounts during invoice approval
+    partnerSkipped: { type: Boolean, default: false }, // ✅ true when branch has no partner
     remarks: { type: String, trim: true },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,

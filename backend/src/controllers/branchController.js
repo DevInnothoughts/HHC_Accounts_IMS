@@ -6,30 +6,15 @@ const { logAction } = require("../services/auditService");
 
 exports.getBranches = async (req, res) => {
   try {
-    const { status, search, page = 1, limit = 20 } = req.query;
     const query = {};
-    if (status) query.status = status;
-    if (search)
-      query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { code: { $regex: search, $options: "i" } },
-        { location: { $regex: search, $options: "i" } },
-      ];
 
-    const total = await Branch.countDocuments(query);
-    const branches = await Branch.find(query)
-      .populate("clusterHead", "name email")
-      .populate("partner", "name email")
-      .sort({ name: 1 })
-      .skip((page - 1) * limit)
-      .limit(Number(limit));
+    // ✅ Only filter by user's branches for non-admin roles
+    if (req.user.role !== "super_admin" && req.user.role !== "accounts") {
+      query._id = { $in: req.user.branches };
+    }
 
-    res.json({
-      branches,
-      total,
-      page: Number(page),
-      pages: Math.ceil(total / limit),
-    });
+    const branches = await Branch.find(query).sort({ name: 1 });
+    res.json(branches);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

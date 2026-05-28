@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import React from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../api/axios";
@@ -56,6 +56,9 @@ export default function VendorForm() {
   const [savedVendorId, setSavedVendorId] = useState(id || null); // ✅ track saved vendor ID
   const [savedVendor, setSavedVendor] = useState(null);
   const [success, setSuccess] = useState("");
+  const [chequeScanning, setChequeScanning] = useState(false);
+  const [chequeError, setChequeError] = useState("");
+  const chequeInputRef = useRef(null);
 
   useEffect(() => {
     api
@@ -211,6 +214,34 @@ export default function VendorForm() {
 
   const handleFinish = async () => {
     navigate("/vendors");
+  };
+
+  const handleChequeScan = async (file) => {
+    if (!file) return;
+    setChequeScanning(true);
+    setChequeError("");
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const { data } = await api.post("/uploads/parse-cheque", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      const b = data.bankDetails;
+      setForm((f) => ({
+        ...f,
+        accountHolderName: b.accountHolderName || f.accountHolderName,
+        bankName: b.bankName || f.bankName,
+        accountNumber: b.accountNumber || f.accountNumber,
+        ifscCode: b.ifscCode || f.ifscCode,
+      }));
+    } catch (err) {
+      setChequeError(
+        err.response?.data?.message ||
+          "Could not read cheque. Please fill bank details manually.",
+      );
+    } finally {
+      setChequeScanning(false);
+    }
   };
 
   const refreshVendor = async () => {
@@ -458,6 +489,86 @@ export default function VendorForm() {
                 <div style={S.infoBox}>
                   🔒 Bank details are used for payment processing. Ensure
                   accuracy.
+                </div>
+
+                <div style={{ gridColumn: "1 / -1" }}>
+                  <div
+                    style={{
+                      background: "#f0f9ff",
+                      border: "1px solid #bae6fd",
+                      borderRadius: 10,
+                      padding: "14px 16px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      flexWrap: "wrap",
+                      gap: 10,
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontWeight: 700,
+                          fontSize: 13,
+                          color: "#0369a1",
+                        }}
+                      >
+                        🤖 Auto-fill from Cancelled Cheque
+                      </div>
+                      <div
+                        style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}
+                      >
+                        Upload a clear photo of the cancelled cheque to
+                        auto-fill bank details
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-end",
+                        gap: 6,
+                      }}
+                    >
+                      <input
+                        ref={chequeInputRef}
+                        type="file"
+                        accept=".jpg,.jpeg,.png"
+                        style={{ display: "none" }}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) handleChequeScan(file);
+                          e.target.value = "";
+                        }}
+                      />
+                      <button
+                        style={{
+                          padding: "9px 18px",
+                          background: chequeScanning ? "#64748b" : "#0369a1",
+                          color: "#fff",
+                          border: "none",
+                          borderRadius: 8,
+                          fontSize: 13,
+                          fontWeight: 600,
+                          cursor: chequeScanning ? "not-allowed" : "pointer",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                        disabled={chequeScanning}
+                        onClick={() => chequeInputRef.current?.click()}
+                      >
+                        {chequeScanning
+                          ? "🔍 Reading cheque..."
+                          : "📷 Scan Cheque"}
+                      </button>
+                      {chequeError && (
+                        <span style={{ fontSize: 12, color: "#dc2626" }}>
+                          ⚠️ {chequeError}
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
                 <div style={S.grid2}>
                   <Field

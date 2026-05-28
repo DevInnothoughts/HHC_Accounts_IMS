@@ -1,5 +1,7 @@
 const router = require("express").Router();
 const { authenticate } = require("../middleware/auth");
+const roleGuard = require("../middleware/roleGaurd");
+const { ROLES } = require("../config/constants");
 const upload = require("../middleware/upload");
 const ctrl = require("../controllers/uploadController");
 
@@ -23,5 +25,13 @@ router.post(
   ctrl.uploadVendorDocument,
 );
 router.delete("/vendor/:id/document/:docType", ctrl.deleteVendorDocument);
+
+// Parse cheque using Google Vision
+router.post(
+  "/parse-cheque",
+  roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  upload.single("file"),
+  ctrl.parseCheque,
+);
 
 module.exports = router;

@@ -34,7 +34,9 @@ const ProtectedRoute = ({ children, roles }) => {
 export default function App() {
   return (
     <AuthProvider>
-      <BrowserRouter basename="/hhc">
+      <BrowserRouter
+        basename={process.env.NODE_ENV === "production" ? "/hhc" : "/"}
+      >
         <Routes>
           {/* Public */}
           <Route path="/login" element={<Login />} />

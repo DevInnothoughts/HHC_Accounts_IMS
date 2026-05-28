@@ -8,14 +8,14 @@ module.exports = {
     DIRECTOR: "director",
   },
 
-  // ── Invoice Processing Statuses ──────────────────────────
-  INVOICE_STATUS: {
-    DRAFT: "Draft",
-    SUBMITTED: "Submitted",
-    PARTNER_APPROVED: "Partner Approved", // ✅ branch_partner acts first now
-    ACCOUNTS_APPROVED: "Accounts Approved", // ✅ accounts acts second
-    CLUSTER_APPROVED: "Cluster Head Approved",
-    REJECTED: "Rejected",
+  // ── Payment Processing Statuses ──────────────────────────
+  PAYMENT_STATUS: {
+    PENDING: "Payment Pending",
+    RAISED: "Payment Raised",
+    ACCOUNTS_APPROVED: "Accounts Approved",
+    EXCEL_GENERATED: "Excel Generated",
+    PROCESSED: "Payment Processed", // ✅ add this
+    REJECTED: "Payment Rejected",
   },
 
   INVOICE_WORKFLOW: [
