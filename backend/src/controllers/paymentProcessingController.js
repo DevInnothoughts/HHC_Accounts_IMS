@@ -64,11 +64,12 @@ exports.getPayments = async (req, res) => {
       query.branch = branch;
     }
 
-    // ✅ Only show payments that have been raised by branch (not pending)
-    if (status) {
+    if (req.query.processedOnly === "true") {
+      query.utrNumber = { $ne: null, $exists: true };
+    } else if (status) {
       query.status = status;
     } else {
-      query.status = { $ne: "Payment Pending" }; // pending ones shown in 'raise payment' list
+      query.status = { $ne: "Payment Pending" };
     }
 
     const total = await PaymentProcessing.countDocuments(query);
@@ -99,7 +100,8 @@ exports.getPayments = async (req, res) => {
 exports.raisePayment = async (req, res) => {
   try {
     const { invoiceId } = req.params;
-    const { paymentRemarks, scheduledDate, paymentAmount } = req.body;
+    const { paymentRemarks, scheduledDate, paymentAmount, paymentType } =
+      req.body;
 
     const invoice = await InvoiceRequest.findById(invoiceId).populate(
       "vendor branch createdBy",
@@ -111,26 +113,71 @@ exports.raisePayment = async (req, res) => {
       });
     }
 
-    // Find the auto-created payment record
     const payment = await PaymentProcessing.findById(invoice.paymentRequest);
     if (!payment)
       return res.status(404).json({ message: "Payment record not found" });
-    if (payment.status !== "Payment Pending") {
-      return res
-        .status(400)
-        .json({ message: `Payment already raised. Status: ${payment.status}` });
+
+    // ✅ Block if fully paid
+    if (payment.status === "Fully Paid") {
+      return res.status(400).json({
+        message: "Payment is already fully cleared for this invoice",
+      });
     }
 
+    // ✅ Block if active installment pending
+    const activeStatuses = [
+      "Payment Raised",
+      "Accounts Approved",
+      "Excel Generated",
+    ];
+    const hasActiveInstallment = payment.installments.some((i) =>
+      activeStatuses.includes(i.status),
+    );
+    if (hasActiveInstallment) {
+      return res.status(400).json({
+        message:
+          "A payment is already in progress. Wait for it to be processed before raising another.",
+      });
+    }
+
+    const totalAmount = payment.totalAmount || invoice.netPayable;
+    const remaining = totalAmount - (payment.paidAmount || 0);
+    const amount = parseFloat(paymentAmount) || remaining;
+
+    if (amount <= 0) {
+      return res.status(400).json({ message: "Invalid payment amount" });
+    }
+    if (amount > remaining) {
+      return res.status(400).json({
+        message: `Amount cannot exceed remaining balance of ₹${remaining.toLocaleString("en-IN")}`,
+      });
+    }
+
+    const isPartial = amount < remaining;
+    const installmentNumber = payment.installments.length + 1;
+    const installmentId = `${payment.paymentId}-${installmentNumber}`;
+
+    const installment = {
+      amount,
+      paymentId: installmentId,
+      status: "Raised",
+      raisedBy: req.user._id,
+      raisedAt: new Date(),
+      paymentRemarks: paymentRemarks || "",
+      scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
+    };
+
+    payment.installments.push(installment);
     payment.status = "Payment Raised";
     payment.currentStage = "accounts";
+    payment.paymentType = isPartial ? "partial" : "full";
+    payment.paymentAmount = amount;
     payment.paymentRemarks = paymentRemarks || "";
     payment.scheduledDate = scheduledDate ? new Date(scheduledDate) : null;
-    payment.paymentAmount = paymentAmount || invoice.netPayable;
     payment.raisedBy = req.user._id;
-
     await payment.save();
 
-    // Notify accounts team
+    // Notify accounts
     const accountsUsers = await User.find({
       role: ROLES.ACCOUNTS,
       status: "active",
@@ -138,16 +185,16 @@ exports.raisePayment = async (req, res) => {
     for (const u of accountsUsers) {
       await sendNotificationEmail(
         u.email,
-        `💳 Payment Request Raised: ${payment.paymentId}`,
+        `💳 ${isPartial ? "Partial " : ""}Payment Request: ${installmentId}`,
         `
-          <p>Branch has raised a payment request for invoice <strong>${invoice.requestId}</strong>.</p>
+          <p>Branch raised a ${isPartial ? "<strong>partial</strong>" : "full"} payment request.</p>
           <table style="width:100%;border-collapse:collapse;margin-top:12px;">
-            <tr><td style="padding:6px;color:#666;">Payment ID</td><td style="padding:6px;font-weight:600;">${payment.paymentId}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Invoice No.</td><td style="padding:6px;font-weight:600;">${invoice.invoiceNumber}</td></tr>
+            <tr><td style="padding:6px;color:#666;">Installment ID</td><td style="padding:6px;font-weight:600;">${installmentId}</td></tr>
+            <tr><td style="padding:6px;color:#666;">Invoice</td><td style="padding:6px;font-weight:600;">${invoice.requestId}</td></tr>
             <tr><td style="padding:6px;color:#666;">Vendor</td><td style="padding:6px;font-weight:600;">${invoice.vendor?.vendorName}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Amount</td><td style="padding:6px;font-weight:600;">₹${payment.paymentAmount?.toLocaleString("en-IN")}</td></tr>
+            <tr><td style="padding:6px;color:#666;">Amount</td><td style="padding:6px;font-weight:600;">₹${amount.toLocaleString("en-IN")}</td></tr>
+            ${isPartial ? `<tr><td style="padding:6px;color:#666;">Remaining after this</td><td style="padding:6px;font-weight:600;color:#d97706;">₹${(remaining - amount).toLocaleString("en-IN")}</td></tr>` : ""}
           </table>
-          <p style="margin-top:12px;">Please review and approve to generate payment Excel.</p>
         `,
       ).catch(console.error);
     }
@@ -729,42 +776,72 @@ exports.bulkGenerateExcel = async (req, res) => {
 // Body: { utrNumber }
 exports.recordUTR = async (req, res) => {
   try {
-    const { utrNumber } = req.body;
+    const { utrNumber, installmentIndex } = req.body;
     if (!utrNumber?.trim())
       return res.status(400).json({ message: "UTR number is required" });
 
     const payment = await PaymentProcessing.findById(req.params.id)
-      .populate("invoiceRequest", "requestId")
+      .populate("invoiceRequest", "requestId netPayable")
       .populate("vendor", "vendorName")
       .populate("raisedBy", "email name");
 
     if (!payment) return res.status(404).json({ message: "Payment not found" });
 
-    if (payment.status !== "Excel Generated")
+    if (!["Excel Generated", "Accounts Approved"].includes(payment.status)) {
       return res.status(400).json({
-        message: "UTR can only be recorded for Excel Generated payments",
+        message: "UTR can only be recorded after Excel is generated",
       });
+    }
 
-    payment.utrNumber = utrNumber.trim();
+    const utr = utrNumber.trim().toUpperCase();
+
+    // ✅ Update the latest installment
+    const latestIdx =
+      installmentIndex !== undefined
+        ? installmentIndex
+        : payment.installments.length - 1;
+
+    if (payment.installments[latestIdx]) {
+      payment.installments[latestIdx].utrNumber = utr;
+      payment.installments[latestIdx].utrRecordedAt = new Date();
+      payment.installments[latestIdx].utrRecordedBy = req.user._id;
+      payment.installments[latestIdx].status = "Processed";
+    }
+
+    // ✅ Update paid amount
+    const installmentAmount = payment.installments[latestIdx]?.amount || 0;
+    payment.paidAmount = (payment.paidAmount || 0) + installmentAmount;
+    payment.remainingAmount = payment.totalAmount - payment.paidAmount;
+
+    // ✅ Determine overall status
+    if (payment.remainingAmount <= 0) {
+      payment.status = "Fully Paid";
+    } else {
+      payment.status = "Partially Paid";
+    }
+
+    // ✅ Legacy UTR fields
+    payment.utrNumber = utr;
     payment.utrRecordedAt = new Date();
     payment.utrRecordedBy = req.user._id;
-    payment.status = "Payment Processed";
+
     await payment.save();
 
-    // Notify branch user
+    // Notify branch
     if (payment.raisedBy?.email) {
       const { sendNotificationEmail } = require("../services/emailService");
       await sendNotificationEmail(
         payment.raisedBy.email,
-        `✅ Payment Processed: ${payment.paymentId}`,
+        `✅ Payment ${payment.status}: ${payment.paymentId}`,
         `
-          <p>Payment <strong>${payment.paymentId}</strong> has been processed.</p>
+          <p>Payment <strong>${payment.paymentId}</strong> UTR recorded.</p>
           <table style="width:100%;border-collapse:collapse;margin-top:12px;">
-            <tr><td style="padding:6px;color:#666;">Payment ID</td><td style="padding:6px;font-weight:600;">${payment.paymentId}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Vendor</td><td style="padding:6px;font-weight:600;">${payment.vendor?.vendorName}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Amount</td><td style="padding:6px;font-weight:600;">₹${payment.paymentAmount?.toLocaleString("en-IN")}</td></tr>
-            <tr><td style="padding:6px;color:#666;">UTR Number</td><td style="padding:6px;font-weight:600;color:#16a34a;">${utrNumber}</td></tr>
+            <tr><td style="padding:6px;color:#666;">UTR Number</td><td style="padding:6px;font-weight:600;color:#16a34a;">${utr}</td></tr>
+            <tr><td style="padding:6px;color:#666;">Amount Paid</td><td style="padding:6px;font-weight:600;">₹${installmentAmount.toLocaleString("en-IN")}</td></tr>
+            <tr><td style="padding:6px;color:#666;">Total Paid</td><td style="padding:6px;font-weight:600;">₹${payment.paidAmount.toLocaleString("en-IN")}</td></tr>
+            ${payment.remainingAmount > 0 ? `<tr><td style="padding:6px;color:#666;">Remaining</td><td style="padding:6px;font-weight:600;color:#d97706;">₹${payment.remainingAmount.toLocaleString("en-IN")}</td></tr>` : ""}
           </table>
+          ${payment.status === "Fully Paid" ? "<p style='color:#16a34a;font-weight:700;margin-top:12px;'>✅ Invoice fully cleared!</p>" : "<p style='color:#d97706;margin-top:12px;'>Remaining balance can be paid in next installment.</p>"}
         `,
       ).catch(console.error);
     }
@@ -774,7 +851,7 @@ exports.recordUTR = async (req, res) => {
       action: "RECORD_UTR",
       module: "Payment",
       targetId: payment._id,
-      newValue: { utrNumber },
+      newValue: { utrNumber: utr, installmentAmount },
       req,
     });
 

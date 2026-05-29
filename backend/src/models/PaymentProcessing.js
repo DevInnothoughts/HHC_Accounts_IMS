@@ -15,6 +15,27 @@ const rejectionSchema = new mongoose.Schema({
   rejectedAt: { type: Date, default: Date.now },
 });
 
+// ✅ Track each individual payment installment
+const paymentInstallmentSchema = new mongoose.Schema({
+  amount: { type: Number, required: true },
+  utrNumber: { type: String, trim: true },
+  utrRecordedAt: { type: Date },
+  utrRecordedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  paymentId: { type: String }, // PAY-000001-1, PAY-000001-2 etc
+  status: {
+    type: String,
+    enum: ["Raised", "Approved", "Excel Generated", "Processed", "Rejected"],
+    default: "Raised",
+  },
+  approvalHistory: [approvalSchema],
+  rejectionHistory: [rejectionSchema],
+  excelGeneratedAt: { type: Date },
+  raisedAt: { type: Date, default: Date.now },
+  raisedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  paymentRemarks: { type: String, trim: true },
+  scheduledDate: { type: Date },
+});
+
 const paymentProcessingSchema = new mongoose.Schema(
   {
     paymentId: { type: String, unique: true },
@@ -33,38 +54,62 @@ const paymentProcessingSchema = new mongoose.Schema(
       ref: "Vendor",
       required: true,
     },
-    paymentAmount: { type: Number, required: true, min: 0 },
 
-    paymentRemarks: { type: String, trim: true },
-    scheduledDate: { type: Date },
+    // ✅ Total invoice net payable
+    totalAmount: { type: Number, required: true },
+
+    // ✅ Total amount paid so far across all installments
+    paidAmount: { type: Number, default: 0 },
+
+    // ✅ Remaining balance
+    remainingAmount: { type: Number },
+
+    // ✅ Payment type
+    paymentType: {
+      type: String,
+      enum: ["full", "partial"],
+      default: "full",
+    },
+
+    // ✅ Overall payment status
     status: {
       type: String,
       enum: [
-        "Payment Pending",
-        "Payment Raised",
-        "Accounts Approved",
-        "Excel Generated",
-        "Payment Processed",
+        "Payment Pending", // waiting for branch to raise
+        "Payment Raised", // branch raised, awaiting accounts
+        "Accounts Approved", // accounts approved
+        "Excel Generated", // excel downloaded
+        "Payment Processed", // UTR recorded
+        "Partially Paid", // partial payment done, balance remaining
+        "Fully Paid", // all payments cleared
         "Payment Rejected",
       ],
       default: "Payment Pending",
     },
+
     currentStage: { type: String, default: "branch" },
+
+    // ✅ All payment installments
+    installments: [paymentInstallmentSchema],
+
+    // ✅ Legacy fields kept for backward compatibility
+    paymentAmount: { type: Number },
+    paymentRemarks: { type: String, trim: true },
+    scheduledDate: { type: Date },
     approvalHistory: [approvalSchema],
     rejectionHistory: [rejectionSchema],
     excelGeneratedAt: { type: Date },
-    raisedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    // Add after excelGeneratedAt field
     utrNumber: { type: String, trim: true, default: null },
     utrRecordedAt: { type: Date, default: null },
     utrRecordedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       default: null,
+    },
+
+    raisedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
     },
   },
   { timestamps: true },
@@ -75,6 +120,8 @@ paymentProcessingSchema.pre("save", async function (next) {
     const count = await mongoose.model("PaymentProcessing").countDocuments();
     this.paymentId = `PAY-${String(count + 1).padStart(6, "0")}`;
   }
+  // Auto-update remaining amount
+  this.remainingAmount = this.totalAmount - (this.paidAmount || 0);
   next();
 });
 

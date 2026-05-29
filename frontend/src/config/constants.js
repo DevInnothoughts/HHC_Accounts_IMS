@@ -21,6 +21,9 @@ export const PAYMENT_STATUS = {
   RAISED: "Payment Raised",
   ACCOUNTS_APPROVED: "Accounts Approved",
   EXCEL_GENERATED: "Excel Generated",
+  PROCESSED: "Payment Processed",
+  PARTIALLY_PAID: "Partially Paid",
+  FULLY_PAID: "Fully Paid",
   REJECTED: "Payment Rejected",
 };
 

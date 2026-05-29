@@ -11,6 +11,8 @@ const STATUS_STYLES = {
   "Accounts Approved": { bg: "#f0fdf4", color: "#16a34a", icon: "✅" },
   "Excel Generated": { bg: "#f0fdf4", color: "#15803d", icon: "📊" },
   "Payment Processed": { bg: "#f0fdf4", color: "#166534", icon: "✅" },
+  "Partially Paid": { bg: "#fffbeb", color: "#d97706", icon: "⚡" },
+  "Fully Paid": { bg: "#f0fdf4", color: "#166534", icon: "🎉" },
   "Payment Rejected": { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
@@ -451,6 +453,131 @@ export default function PaymentDetail() {
               ))
             )}
           </InfoCard>
+
+          {/* Payment Installments */}
+          {payment.installments?.length > 0 && (
+            <InfoCard title="💳 Payment Installments">
+              {payment.installments.map((inst, i) => (
+                <div
+                  key={i}
+                  style={{
+                    padding: "12px 0",
+                    borderBottom: "1px solid #f1f5f9",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 6,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontFamily: "monospace",
+                        fontWeight: 700,
+                        color: "#1a3c6e",
+                        fontSize: 13,
+                      }}
+                    >
+                      {inst.paymentId || `Installment ${i + 1}`}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 600,
+                        padding: "2px 8px",
+                        borderRadius: 20,
+                        background:
+                          inst.status === "Processed" ? "#f0fdf4" : "#eff6ff",
+                        color:
+                          inst.status === "Processed" ? "#166534" : "#2563eb",
+                      }}
+                    >
+                      {inst.status}
+                    </span>
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      fontSize: 13,
+                    }}
+                  >
+                    <span style={{ color: "#64748b" }}>Amount</span>
+                    <strong>
+                      ₹
+                      {inst.amount?.toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </strong>
+                  </div>
+                  {inst.utrNumber && (
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        fontSize: 13,
+                      }}
+                    >
+                      <span style={{ color: "#64748b" }}>UTR</span>
+                      <span
+                        style={{
+                          fontFamily: "monospace",
+                          fontWeight: 700,
+                          color: "#166534",
+                          background: "#dcfce7",
+                          padding: "2px 8px",
+                          borderRadius: 6,
+                        }}
+                      >
+                        {inst.utrNumber}
+                      </span>
+                    </div>
+                  )}
+                  {inst.utrRecordedAt && (
+                    <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                      Processed:{" "}
+                      {new Date(inst.utrRecordedAt).toLocaleDateString("en-GB")}
+                    </div>
+                  )}
+                </div>
+              ))}
+              <div
+                style={{
+                  padding: "10px 0",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontWeight: 700,
+                  fontSize: 14,
+                }}
+              >
+                <span>Total Paid</span>
+                <span style={{ color: "#166534" }}>
+                  ₹
+                  {payment.paidAmount?.toLocaleString("en-IN", {
+                    minimumFractionDigits: 2,
+                  })}
+                  {payment.remainingAmount > 0 && (
+                    <span
+                      style={{
+                        color: "#d97706",
+                        fontWeight: 400,
+                        fontSize: 12,
+                        marginLeft: 8,
+                      }}
+                    >
+                      (₹{payment.remainingAmount?.toLocaleString("en-IN")}{" "}
+                      remaining)
+                    </span>
+                  )}
+                </span>
+              </div>
+            </InfoCard>
+          )}
         </div>
 
         {/* Approve Modal */}

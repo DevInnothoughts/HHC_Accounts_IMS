@@ -179,6 +179,7 @@ exports.approveInvoice = async (req, res) => {
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
     // ✅ Handle partner-skipped invoices — accounts can act on Submitted directly
+    // ✅ Handle partner-skipped invoices — accounts can act on Submitted directly
     const partnerSkipped =
       invoice.partnerSkipped && invoice.status === INVOICE_STATUS.SUBMITTED;
     const normalTurn = canActOnInvoice(req.user.role, invoice.status);
@@ -192,7 +193,7 @@ exports.approveInvoice = async (req, res) => {
       });
     }
 
-    // For partner-skipped invoices, use accounts approval step
+    // ✅ For partner-skipped invoices, use accounts approval step
     const step = partnerSkipped
       ? {
           label: "Accounts Approval (Partner Skipped)",
@@ -248,7 +249,10 @@ exports.approveInvoice = async (req, res) => {
         invoiceRequest: invoice._id,
         branch: invoice.branch._id || invoice.branch,
         vendor: invoice.vendor._id || invoice.vendor,
+        totalAmount: invoice.netPayable, // ✅ store total
         paymentAmount: invoice.netPayable,
+        paidAmount: 0,
+        remainingAmount: invoice.netPayable,
         status: "Payment Pending",
         currentStage: "branch",
         raisedBy: invoice.createdBy._id || invoice.createdBy,
@@ -299,6 +303,7 @@ exports.approveInvoice = async (req, res) => {
     });
     res.json(invoice);
   } catch (err) {
+    console.error("approveInvoice error:", err); // ← add this
     res.status(500).json({ message: err.message });
   }
 };

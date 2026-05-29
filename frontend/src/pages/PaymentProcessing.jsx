@@ -12,6 +12,8 @@ const STATUS_STYLES = {
   "Accounts Approved": { bg: "#f0fdf4", color: "#16a34a", icon: "✅" },
   "Excel Generated": { bg: "#f0fdf4", color: "#15803d", icon: "📊" },
   "Payment Processed": { bg: "#f0fdf4", color: "#166534", icon: "✅" },
+  "Partially Paid": { bg: "#fffbeb", color: "#d97706", icon: "⚡" },
+  "Fully Paid": { bg: "#f0fdf4", color: "#166534", icon: "🎉" },
   "Payment Rejected": { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
@@ -29,6 +31,7 @@ export default function PaymentProcessing() {
     paymentRemarks: "",
     scheduledDate: "",
     paymentAmount: "",
+    paymentType: "full",
   });
   const [raising, setRaising] = useState(false);
   const [error, setError] = useState("");
@@ -46,7 +49,7 @@ export default function PaymentProcessing() {
       const [invRes, payRes, processedRes] = await Promise.all([
         api.get("/payments/approved-invoices"),
         api.get("/payments"),
-        api.get("/payments?status=Payment Processed&limit=100"),
+        api.get("/payments?processedOnly=true&limit=100"),
       ]);
       setInvoices(
         Array.isArray(invRes.data) ? invRes.data : invRes.data.invoices || [],
@@ -54,7 +57,14 @@ export default function PaymentProcessing() {
       const allPayments = Array.isArray(payRes.data)
         ? payRes.data
         : payRes.data.payments || [];
-      setPayments(allPayments.filter((p) => p.status !== "Payment Processed"));
+      setPayments(
+        allPayments.filter(
+          (p) =>
+            !["Payment Processed", "Partially Paid", "Fully Paid"].includes(
+              p.status,
+            ),
+        ),
+      );
       setProcessedPayments(
         Array.isArray(processedRes.data)
           ? processedRes.data
@@ -261,6 +271,7 @@ export default function PaymentProcessing() {
                           "Vendor",
                           "Branch",
                           "Amount",
+                          "Payment Progress",
                           "Payment Status",
                           "Action",
                         ].map((h) => (
@@ -277,7 +288,23 @@ export default function PaymentProcessing() {
                           STATUS_STYLES[pay?.status] ||
                           STATUS_STYLES["Payment Pending"];
                         const canRaise =
-                          isBranch && pay?.status === "Payment Pending";
+                          isBranch &&
+                          ["Payment Pending", "Partially Paid"].includes(
+                            pay?.status,
+                          );
+                        const isFullyPaid = pay?.status === "Fully Paid";
+                        const hasActivePayment = [
+                          "Payment Raised",
+                          "Accounts Approved",
+                          "Excel Generated",
+                        ].includes(pay?.status);
+                        const total = pay?.totalAmount || inv.netPayable || 0;
+                        const paid = pay?.paidAmount || 0;
+                        const remaining = pay?.remainingAmount ?? total;
+                        const pct =
+                          total > 0
+                            ? Math.min(100, Math.round((paid / total) * 100))
+                            : 0;
                         return (
                           <tr key={inv._id} style={S.tr}>
                             <td style={S.td}>
@@ -302,6 +329,64 @@ export default function PaymentProcessing() {
                             >
                               ₹{inv.netPayable?.toLocaleString("en-IN")}
                             </td>
+                            {/* ✅ Payment Progress */}
+                            <td style={S.td}>
+                              <div style={{ minWidth: 130 }}>
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    color: "#64748b",
+                                    marginBottom: 3,
+                                  }}
+                                >
+                                  ₹{paid.toLocaleString("en-IN")} / ₹
+                                  {total.toLocaleString("en-IN")}
+                                </div>
+                                <div
+                                  style={{
+                                    background: "#e2e8f0",
+                                    borderRadius: 4,
+                                    height: 6,
+                                    overflow: "hidden",
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      width: `${pct}%`,
+                                      height: "100%",
+                                      background:
+                                        pct === 100 ? "#16a34a" : "#d97706",
+                                      borderRadius: 4,
+                                      transition: "width 0.3s",
+                                    }}
+                                  />
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    color: pct === 100 ? "#16a34a" : "#d97706",
+                                    marginTop: 2,
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {pct}% paid
+                                  {remaining > 0 && pct > 0 && (
+                                    <span
+                                      style={{
+                                        color: "#94a3b8",
+                                        fontWeight: 400,
+                                      }}
+                                    >
+                                      {" "}
+                                      · ₹{remaining.toLocaleString(
+                                        "en-IN",
+                                      )}{" "}
+                                      left
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </td>
                             <td style={S.td}>
                               <span
                                 style={{
@@ -314,18 +399,37 @@ export default function PaymentProcessing() {
                               </span>
                             </td>
                             <td style={S.td}>
-                              {canRaise ? (
-                                <button
-                                  style={S.raiseBtn}
-                                  onClick={() => {
-                                    setRaiseModal(inv);
-                                    setRaiseForm((f) => ({
-                                      ...f,
-                                      paymentAmount: inv.netPayable,
-                                    }));
+                              {isFullyPaid ? (
+                                <span
+                                  style={{
+                                    fontSize: 12,
+                                    color: "#16a34a",
+                                    fontWeight: 700,
                                   }}
                                 >
-                                  💳 Raise Payment
+                                  🎉 Fully Paid
+                                </span>
+                              ) : canRaise ? (
+                                <button
+                                  style={{
+                                    ...S.raiseBtn,
+                                    ...(pay?.status === "Partially Paid"
+                                      ? { background: "#d97706" }
+                                      : {}),
+                                  }}
+                                  onClick={() => {
+                                    setRaiseModal(inv);
+                                    setRaiseForm({
+                                      paymentRemarks: "",
+                                      scheduledDate: "",
+                                      paymentAmount: remaining,
+                                      paymentType: "full",
+                                    });
+                                  }}
+                                >
+                                  {pay?.status === "Partially Paid"
+                                    ? "⚡ Pay Remaining"
+                                    : "💳 Raise Payment"}
                                 </button>
                               ) : (
                                 <button
@@ -343,7 +447,7 @@ export default function PaymentProcessing() {
                       })}
                       {invoices.length === 0 && (
                         <tr>
-                          <td colSpan={7} style={S.emptyCell}>
+                          <td colSpan={8} style={S.emptyCell}>
                             No approved invoices available for payment
                           </td>
                         </tr>
@@ -513,12 +617,26 @@ export default function PaymentProcessing() {
                                   View
                                 </button>
                                 {canApprove && (
-                                  <button
-                                    style={S.approveBtn}
-                                    onClick={() => handleApprove(pay._id, "")}
-                                  >
-                                    ✓ Approve
-                                  </button>
+                                  <>
+                                    <button
+                                      style={S.rejectBtn}
+                                      onClick={() => {
+                                        const reason = window.prompt(
+                                          "Rejection reason (required):",
+                                        );
+                                        if (reason?.trim())
+                                          handleReject(pay._id, reason);
+                                      }}
+                                    >
+                                      ✗ Reject
+                                    </button>
+                                    <button
+                                      style={S.approveBtn}
+                                      onClick={() => handleApprove(pay._id, "")}
+                                    >
+                                      ✓ Approve
+                                    </button>
+                                  </>
                                 )}
                                 {canExcel && (
                                   <button
@@ -635,7 +753,7 @@ export default function PaymentProcessing() {
                 ))}
                 {processedPayments.length === 0 && (
                   <tr>
-                    <td colSpan={7} style={S.emptyCell}>
+                    <td colSpan={8} style={S.emptyCell}>
                       No processed payments yet
                     </td>
                   </tr>
@@ -687,56 +805,169 @@ export default function PaymentProcessing() {
                 </div>
               </div>
 
-              <div style={S.formGrid}>
-                <div style={S.field}>
-                  <label style={S.label}>Payment Amount (₹)</label>
-                  <input
-                    style={S.input}
-                    type="number"
-                    value={raiseForm.paymentAmount}
-                    onChange={(e) =>
-                      setRaiseForm((f) => ({
-                        ...f,
-                        paymentAmount: e.target.value,
-                      }))
-                    }
-                    placeholder={raiseModal.netPayable}
-                  />
+              <div style={S.invoiceSummary}>
+                <div style={S.summaryRow}>
+                  <span>Total Invoice Amount</span>
+                  <strong>
+                    ₹
+                    {(
+                      raiseModal.paymentRequest?.totalAmount ||
+                      raiseModal.netPayable
+                    )?.toLocaleString("en-IN")}
+                  </strong>
                 </div>
+                <div style={S.summaryRow}>
+                  <span>Already Paid</span>
+                  <strong style={{ color: "#16a34a" }}>
+                    ₹
+                    {(
+                      raiseModal.paymentRequest?.paidAmount || 0
+                    )?.toLocaleString("en-IN")}
+                  </strong>
+                </div>
+                <div
+                  style={{
+                    ...S.summaryRow,
+                    borderTop: "2px solid #e2e8f0",
+                    paddingTop: 8,
+                    marginTop: 4,
+                  }}
+                >
+                  <span style={{ fontWeight: 700 }}>Remaining Balance</span>
+                  <strong style={{ color: "#d97706", fontSize: 16 }}>
+                    ₹
+                    {(
+                      raiseModal.paymentRequest?.remainingAmount ??
+                      raiseModal.netPayable
+                    )?.toLocaleString("en-IN")}
+                  </strong>
+                </div>
+              </div>
 
-                <div style={S.field}>
-                  <label style={S.label}>Scheduled Date</label>
-                  <input
-                    style={S.input}
-                    type="date"
-                    value={raiseForm.scheduledDate}
-                    onChange={(e) =>
-                      setRaiseForm((f) => ({
-                        ...f,
-                        scheduledDate: e.target.value,
-                      }))
-                    }
-                  />
+              {/* Payment Type */}
+              <div style={S.field}>
+                <label style={S.label}>Payment Type *</label>
+                <div style={{ display: "flex", gap: 10 }}>
+                  {["full", "partial"].map((type) => (
+                    <label
+                      key={type}
+                      style={{
+                        flex: 1,
+                        padding: "10px 14px",
+                        border: `1.5px solid ${raiseForm.paymentType === type ? (type === "full" ? "#16a34a" : "#d97706") : "#e2e8f0"}`,
+                        borderRadius: 8,
+                        cursor: "pointer",
+                        textAlign: "center",
+                        fontWeight: 600,
+                        fontSize: 13,
+                        background:
+                          raiseForm.paymentType === type
+                            ? type === "full"
+                              ? "#f0fdf4"
+                              : "#fffbeb"
+                            : "#fff",
+                        color:
+                          raiseForm.paymentType === type
+                            ? type === "full"
+                              ? "#16a34a"
+                              : "#d97706"
+                            : "#475569",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="paymentType"
+                        value={type}
+                        checked={raiseForm.paymentType === type}
+                        onChange={(e) => {
+                          const remaining =
+                            raiseModal.paymentRequest?.remainingAmount ??
+                            raiseModal.netPayable;
+                          setRaiseForm((f) => ({
+                            ...f,
+                            paymentType: e.target.value,
+                            paymentAmount:
+                              e.target.value === "full" ? remaining : "",
+                          }));
+                        }}
+                        style={{ display: "none" }}
+                      />
+                      {type === "full"
+                        ? "💯 Full Payment"
+                        : "⚡ Partial Payment"}
+                    </label>
+                  ))}
                 </div>
-                <div style={{ ...S.field, gridColumn: "1/-1" }}>
-                  <label style={S.label}>Remarks</label>
-                  <textarea
+              </div>
+
+              {/* ✅ Amount input — always show, readonly for full */}
+              <div style={S.field}>
+                <label style={S.label}>
+                  {raiseForm.paymentType === "partial"
+                    ? "Partial Amount (₹) *"
+                    : "Payment Amount (₹)"}
+                </label>
+                <div style={{ position: "relative" }}>
+                  <span
                     style={{
-                      ...S.input,
-                      minHeight: 70,
-                      resize: "vertical",
-                      fontFamily: "inherit",
+                      position: "absolute",
+                      left: 12,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      color: "#64748b",
+                      fontWeight: 600,
+                      pointerEvents: "none",
                     }}
-                    value={raiseForm.paymentRemarks}
-                    onChange={(e) =>
-                      setRaiseForm((f) => ({
-                        ...f,
-                        paymentRemarks: e.target.value,
-                      }))
+                  >
+                    ₹
+                  </span>
+                  <input
+                    type="number"
+                    min="1"
+                    max={
+                      raiseModal.paymentRequest?.remainingAmount ??
+                      raiseModal.netPayable
                     }
-                    placeholder="Any remarks for accounts team..."
+                    step="0.01"
+                    style={{
+                      width: "100%",
+                      padding: "10px 12px 10px 28px",
+                      border: "1.5px solid #e2e8f0",
+                      borderRadius: 8,
+                      fontSize: 14,
+                      outline: "none",
+                      boxSizing: "border-box",
+                      background:
+                        raiseForm.paymentType === "full" ? "#f8fafc" : "#fff",
+                      color:
+                        raiseForm.paymentType === "full"
+                          ? "#64748b"
+                          : "#334155",
+                    }}
+                    value={raiseForm.paymentAmount}
+                    readOnly={raiseForm.paymentType === "full"}
+                    onChange={(e) => {
+                      if (raiseForm.paymentType === "partial") {
+                        setRaiseForm((f) => ({
+                          ...f,
+                          paymentAmount: e.target.value,
+                        }));
+                      }
+                    }}
+                    placeholder="Enter amount..."
                   />
                 </div>
+                {raiseForm.paymentType === "partial" && (
+                  <span
+                    style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}
+                  >
+                    Max: ₹
+                    {(
+                      raiseModal.paymentRequest?.remainingAmount ??
+                      raiseModal.netPayable
+                    )?.toLocaleString("en-IN")}
+                  </span>
+                )}
               </div>
 
               <div style={S.vendorBank}>
@@ -1184,6 +1415,16 @@ const S = {
     border: "1px solid #bfdbfe",
     borderRadius: 6,
     color: C.accent,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  rejectBtn: {
+    padding: "5px 12px",
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 6,
+    color: "#dc2626",
     fontSize: 12,
     fontWeight: 600,
     cursor: "pointer",

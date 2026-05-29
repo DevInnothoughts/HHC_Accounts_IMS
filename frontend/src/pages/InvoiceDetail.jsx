@@ -61,7 +61,12 @@ export default function InvoiceDetail() {
   const currentStage = INVOICE_WORKFLOW.find(
     (s) => s.status === invoice?.status,
   );
-  const isMyTurn = currentStage && currentStage.actingRole === user?.role;
+  // ✅ If partner was skipped, accounts acts on Submitted directly
+  const partnerSkipped =
+    invoice?.partnerSkipped && invoice?.status === "Submitted";
+  const isMyTurn =
+    (currentStage && currentStage.actingRole === user?.role) ||
+    (partnerSkipped && user?.role === "accounts");
 
   const isBranchUser = user?.role === "branch_user";
   const isAccounts = user?.role === "accounts";
@@ -86,12 +91,10 @@ export default function InvoiceDetail() {
   const submitBlocked = canSubmit && missingRequiredDocs.length > 0;
 
   // ✅ Accounts can approve Submitted invoices when partner was skipped
-  const partnerSkipped =
-    invoice?.partnerSkipped && invoice?.status === "Submitted";
+
   const canApprove =
-    !["Draft", "Rejected", "Cluster Head Approved"].includes(invoice?.status) &&
-    (isMyTurn || (isAccounts && partnerSkipped));
-  // ✅ This is already correct — isMyTurn handles role matching via INVOICE_WORKFLOW
+    (isMyTurn || partnerSkipped) &&
+    !["Draft", "Rejected", "Cluster Head Approved"].includes(invoice?.status);
   const canReject = canApprove;
 
   // ── Actions ────────────────────────────────────────────
@@ -283,13 +286,15 @@ export default function InvoiceDetail() {
               ) && (
                 <div style={S.waitingBadge}>
                   ⏳ Awaiting:{" "}
-                  {currentStage?.actingRole === "branch_partner"
-                    ? "Branch Partner"
-                    : currentStage?.actingRole === "accounts"
-                      ? "Accounts Team"
-                      : currentStage?.actingRole === "cluster_head"
-                        ? "Cluster Head"
-                        : currentStage?.actingRole?.replace(/_/g, " ")}
+                  {partnerSkipped
+                    ? "Accounts Team (Partner Skipped)"
+                    : currentStage?.actingRole === "branch_partner"
+                      ? "Branch Partner"
+                      : currentStage?.actingRole === "accounts"
+                        ? "Accounts Team"
+                        : currentStage?.actingRole === "cluster_head"
+                          ? "Cluster Head"
+                          : currentStage?.actingRole?.replace(/_/g, " ")}
                 </div>
               )}
           </div>

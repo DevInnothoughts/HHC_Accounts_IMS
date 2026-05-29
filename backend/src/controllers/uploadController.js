@@ -1,4 +1,6 @@
 const path = require("path");
+const fs = require("fs");
+const vision = require("@google-cloud/vision");
 const {
   uploadFile,
   deleteFile,
@@ -7,8 +9,21 @@ const {
 const { logAction } = require("../services/auditService");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const Vendor = require("../models/Vendor");
-const vision = require("@google-cloud/vision");
-const client = new vision.ImageAnnotatorClient();
+
+// ✅ Load Google Vision credentials
+let visionClient = null;
+const CRED_PATH = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+if (CRED_PATH && fs.existsSync(CRED_PATH)) {
+  try {
+    const credentials = JSON.parse(fs.readFileSync(CRED_PATH, "utf8"));
+    visionClient = new vision.ImageAnnotatorClient({ credentials });
+  } catch (err) {
+    visionClient = null;
+  }
+} else {
+  console.error("[Vision] Credentials file not found — Vision API disabled");
+}
 
 // ── Invoice / Payment Attachment ──────────────────────────
 exports.uploadPaymentAttachment = async (req, res) => {
@@ -172,7 +187,13 @@ exports.parseCheque = async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
-    const [result] = await client.textDetection({
+    if (!visionClient) {
+      return res.status(500).json({
+        message: "Vision API not configured. Please check credentials.",
+      });
+    }
+
+    const [result] = await visionClient.textDetection({
       image: { content: req.file.buffer.toString("base64") },
     });
 
