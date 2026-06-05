@@ -23,6 +23,17 @@ const attachmentSchema = new mongoose.Schema({
   uploadedAt: { type: Date, default: Date.now },
 });
 
+const invoiceItemSchema = new mongoose.Schema(
+  {
+    description: { type: String, trim: true, default: "" },
+    amount: { type: Number, required: true, min: 0 }, // item value (pre-GST)
+    gstPercentage: { type: Number, required: true, min: 0, max: 100 },
+    gstAmount: { type: Number, default: 0, min: 0 }, // amount * gstPercentage / 100
+    total: { type: Number, default: 0, min: 0 }, // amount + gstAmount
+  },
+  { _id: false },
+);
+
 const invoiceRequestSchema = new mongoose.Schema(
   {
     requestId: { type: String, unique: true },
@@ -42,6 +53,7 @@ const invoiceRequestSchema = new mongoose.Schema(
       ref: "ExpenseCategory",
       required: true,
     },
+    items: { type: [invoiceItemSchema], default: [] },
     amount: { type: Number, required: true, min: 0 },
     gstAmount: { type: Number, default: 0, min: 0 },
     tdsAmount: { type: Number, default: 0, min: 0 },

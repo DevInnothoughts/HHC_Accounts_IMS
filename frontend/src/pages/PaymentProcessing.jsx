@@ -112,6 +112,15 @@ export default function PaymentProcessing() {
     }
   };
 
+  const handleReject = async (paymentId, reason) => {
+    try {
+      await api.patch(`/payments/${paymentId}/reject`, { reason });
+      fetchData();
+    } catch (err) {
+      setError(err.response?.data?.message || "Rejection failed");
+    }
+  };
+
   const handleGenerateExcel = async (paymentId) => {
     try {
       const res = await api.post(
@@ -289,9 +298,11 @@ export default function PaymentProcessing() {
                           STATUS_STYLES["Payment Pending"];
                         const canRaise =
                           isBranch &&
-                          ["Payment Pending", "Partially Paid"].includes(
-                            pay?.status,
-                          );
+                          [
+                            "Payment Pending",
+                            "Partially Paid",
+                            "Payment Rejected",
+                          ].includes(pay?.status);
                         const isFullyPaid = pay?.status === "Fully Paid";
                         const hasActivePayment = [
                           "Payment Raised",
@@ -429,7 +440,9 @@ export default function PaymentProcessing() {
                                 >
                                   {pay?.status === "Partially Paid"
                                     ? "⚡ Pay Remaining"
-                                    : "💳 Raise Payment"}
+                                    : pay?.status === "Payment Rejected"
+                                      ? "🔄 Re-raise Payment"
+                                      : "💳 Raise Payment"}
                                 </button>
                               ) : (
                                 <button

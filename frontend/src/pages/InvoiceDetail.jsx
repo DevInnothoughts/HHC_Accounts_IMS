@@ -93,7 +93,7 @@ export default function InvoiceDetail() {
   // ✅ Accounts can approve Submitted invoices when partner was skipped
 
   const canApprove =
-    (isMyTurn || partnerSkipped) &&
+    isMyTurn &&
     !["Draft", "Rejected", "Cluster Head Approved"].includes(invoice?.status);
   const canReject = canApprove;
 
@@ -541,64 +541,179 @@ export default function InvoiceDetail() {
 
           {/* Financials */}
           {activeTab === "financials" && (
-            <div style={S.grid2}>
-              <InfoCard title="Amount Breakdown">
-                <div style={S.amountRow}>
-                  <span style={S.amountLabel}>Base Amount</span>
-                  <span style={S.amountVal}>
-                    ₹
-                    {invoice.amount?.toLocaleString("en-IN", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                <div style={S.amountRow}>
-                  <span style={S.amountLabel}>GST Amount</span>
-                  <span style={S.amountVal}>
-                    + ₹
-                    {invoice.gstAmount?.toLocaleString("en-IN", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                <div style={S.amountRow}>
-                  <span style={S.amountLabel}>TDS Deduction</span>
-                  <span style={{ ...S.amountVal, color: "#dc2626" }}>
-                    − ₹
-                    {invoice.tdsAmount?.toLocaleString("en-IN", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-                <div style={S.divider} />
-                <div style={S.netRow}>
-                  <span style={S.netLabel}>Net Payable</span>
-                  <span style={S.netVal}>
-                    ₹
-                    {invoice.netPayable?.toLocaleString("en-IN", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-              </InfoCard>
-              <InfoCard title="Payment Destination">
-                <InfoRow
-                  label="Account Holder"
-                  value={invoice.vendor?.accountHolderName}
-                />
-                <InfoRow label="Bank Name" value={invoice.vendor?.bankName} />
-                <InfoRow
-                  label="Account No."
-                  value={`****${invoice.vendor?.accountNumber?.slice(-4)}`}
-                  mono
-                />
-                <InfoRow
-                  label="IFSC Code"
-                  value={invoice.vendor?.ifscCode}
-                  mono
-                />
-              </InfoCard>
-            </div>
+            <>
+              {invoice.items?.length > 0 && (
+                <InfoCard title="Invoice Items">
+                  <div style={{ overflowX: "auto" }}>
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        fontSize: 13,
+                      }}
+                    >
+                      <thead>
+                        <tr>
+                          <th
+                            style={{
+                              padding: "6px 8px",
+                              textAlign: "left",
+                              color: "#64748b",
+                              fontSize: 11,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Description
+                          </th>
+                          <th
+                            style={{
+                              padding: "6px 8px",
+                              textAlign: "right",
+                              color: "#64748b",
+                              fontSize: 11,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Value
+                          </th>
+                          <th
+                            style={{
+                              padding: "6px 8px",
+                              textAlign: "right",
+                              color: "#64748b",
+                              fontSize: 11,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            GST %
+                          </th>
+                          <th
+                            style={{
+                              padding: "6px 8px",
+                              textAlign: "right",
+                              color: "#64748b",
+                              fontSize: 11,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            GST Amt
+                          </th>
+                          <th
+                            style={{
+                              padding: "6px 8px",
+                              textAlign: "right",
+                              color: "#64748b",
+                              fontSize: 11,
+                              textTransform: "uppercase",
+                            }}
+                          >
+                            Total
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {invoice.items.map((it, i) => (
+                          <tr
+                            key={i}
+                            style={{ borderTop: "1px solid #f1f5f9" }}
+                          >
+                            <td style={{ padding: "8px", color: "#334155" }}>
+                              {it.description || "—"}
+                            </td>
+                            <td style={{ padding: "8px", textAlign: "right" }}>
+                              ₹
+                              {it.amount?.toLocaleString("en-IN", {
+                                minimumFractionDigits: 2,
+                              })}
+                            </td>
+                            <td style={{ padding: "8px", textAlign: "right" }}>
+                              {it.gstPercentage}%
+                            </td>
+                            <td style={{ padding: "8px", textAlign: "right" }}>
+                              ₹
+                              {it.gstAmount?.toLocaleString("en-IN", {
+                                minimumFractionDigits: 2,
+                              })}
+                            </td>
+                            <td
+                              style={{
+                                padding: "8px",
+                                textAlign: "right",
+                                fontWeight: 700,
+                                color: "#1a3c6e",
+                              }}
+                            >
+                              ₹
+                              {it.total?.toLocaleString("en-IN", {
+                                minimumFractionDigits: 2,
+                              })}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </InfoCard>
+              )}
+              <div style={S.grid2}>
+                <InfoCard title="Amount Breakdown">
+                  <div style={S.amountRow}>
+                    <span style={S.amountLabel}>Base Amount</span>
+                    <span style={S.amountVal}>
+                      ₹
+                      {invoice.amount?.toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <div style={S.amountRow}>
+                    <span style={S.amountLabel}>GST Amount</span>
+                    <span style={S.amountVal}>
+                      + ₹
+                      {invoice.gstAmount?.toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <div style={S.amountRow}>
+                    <span style={S.amountLabel}>TDS Deduction</span>
+                    <span style={{ ...S.amountVal, color: "#dc2626" }}>
+                      − ₹
+                      {invoice.tdsAmount?.toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <div style={S.divider} />
+                  <div style={S.netRow}>
+                    <span style={S.netLabel}>Net Payable</span>
+                    <span style={S.netVal}>
+                      ₹
+                      {invoice.netPayable?.toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                </InfoCard>
+                <InfoCard title="Payment Destination">
+                  <InfoRow
+                    label="Account Holder"
+                    value={invoice.vendor?.accountHolderName}
+                  />
+                  <InfoRow label="Bank Name" value={invoice.vendor?.bankName} />
+                  <InfoRow
+                    label="Account No."
+                    value={`****${invoice.vendor?.accountNumber?.slice(-4)}`}
+                    mono
+                  />
+                  <InfoRow
+                    label="IFSC Code"
+                    value={invoice.vendor?.ifscCode}
+                    mono
+                  />
+                </InfoCard>
+              </div>
+            </>
           )}
 
           {/* Vendor */}

@@ -24,9 +24,28 @@ const canActOnInvoice = (role, status) => {
   return step && step.actingRole === role;
 };
 
+// ✅ Derive base amount + total GST from invoice line items
+const computeInvoiceTotals = (items = []) => {
+  const normalized = (Array.isArray(items) ? items : []).map((it) => {
+    const amount = Number(it.amount) || 0;
+    const gstPercentage = Number(it.gstPercentage) || 0;
+    const gstAmount = +((amount * gstPercentage) / 100).toFixed(2);
+    return {
+      description: (it.description || "").trim(),
+      amount: +amount.toFixed(2),
+      gstPercentage,
+      gstAmount,
+      total: +(amount + gstAmount).toFixed(2),
+    };
+  });
+  const amount = +normalized.reduce((s, i) => s + i.amount, 0).toFixed(2);
+  const gstAmount = +normalized.reduce((s, i) => s + i.gstAmount, 0).toFixed(2);
+  return { items: normalized, amount, gstAmount };
+};
+
 exports.createInvoice = async (req, res) => {
   try {
-    const { branch, vendor, expenseType, netPayable, invoiceNumber } = req.body;
+    const { branch, vendor, expenseType, invoiceNumber, items } = req.body;
 
     const vendorDoc = await Vendor.findById(vendor);
     if (!vendorDoc)
@@ -37,6 +56,23 @@ exports.createInvoice = async (req, res) => {
         vendorApprovalStatus: vendorDoc.approvalStatus,
       });
     }
+
+    // ✅ Build payload and derive totals from line items when provided
+    const payload = { ...req.body };
+    if (Array.isArray(items) && items.length > 0) {
+      const totals = computeInvoiceTotals(items);
+      if (totals.amount <= 0) {
+        return res.status(400).json({
+          message: "Invoice must have at least one item with a value.",
+        });
+      }
+      payload.items = totals.items;
+      payload.amount = totals.amount;
+      payload.gstAmount = totals.gstAmount;
+      // TDS is applied later at accounts approval, so netPayable here = base + GST
+      payload.netPayable = +(totals.amount + totals.gstAmount).toFixed(2);
+    }
+    const netPayable = payload.netPayable;
 
     const dupCheck = await checkDuplicateInvoice(
       branch,
@@ -58,7 +94,7 @@ exports.createInvoice = async (req, res) => {
     }
 
     const invoice = await InvoiceRequest.create({
-      ...req.body,
+      ...payload,
       createdBy: req.user._id,
       status: INVOICE_STATUS.DRAFT,
       currentStage: "branch",
@@ -320,7 +356,12 @@ exports.rejectInvoice = async (req, res) => {
     );
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
-    if (!canActOnInvoice(req.user.role, invoice.status)) {
+    // ✅ Allow accounts to reject partner-skipped invoices at Submitted stage
+    const partnerSkipped =
+      invoice.partnerSkipped && invoice.status === INVOICE_STATUS.SUBMITTED;
+    const normalTurn = canActOnInvoice(req.user.role, invoice.status);
+
+    if (!normalTurn && !partnerSkipped) {
       const step = getWorkflowStep(invoice.status);
       return res.status(403).json({
         message: step
@@ -329,7 +370,9 @@ exports.rejectInvoice = async (req, res) => {
       });
     }
 
-    const step = getWorkflowStep(invoice.status);
+    const step = partnerSkipped
+      ? { label: "Accounts Approval (Partner Skipped)" }
+      : getWorkflowStep(invoice.status);
 
     invoice.status = INVOICE_STATUS.REJECTED;
     invoice.currentStage = "branch";
@@ -427,6 +470,15 @@ exports.updateInvoice = async (req, res) => {
     delete updateData.requestId;
     delete updateData.tdsPercentage; // ✅ TDS only set during approval, not edit
     delete updateData.tdsAmount; // ✅ recalculated during accounts approval
+
+    // ✅ Recompute base/GST/net from edited line items
+    if (Array.isArray(updateData.items) && updateData.items.length > 0) {
+      const totals = computeInvoiceTotals(updateData.items);
+      updateData.items = totals.items;
+      updateData.amount = totals.amount;
+      updateData.gstAmount = totals.gstAmount;
+      updateData.netPayable = +(totals.amount + totals.gstAmount).toFixed(2);
+    }
 
     const updated = await InvoiceRequest.findByIdAndUpdate(
       req.params.id,

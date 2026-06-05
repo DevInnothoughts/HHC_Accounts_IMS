@@ -6,6 +6,7 @@ import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import DuplicateInvoiceChecker from "../components/DuplicateInvoiceChecker.jsx";
 import FileUpload from "../components/FileUpload.jsx";
+import InvoiceItemsEditor from "../components/InvoiceItemsEditor.jsx";
 
 const PRIORITY_OPTIONS = ["Normal", "Urgent", "Critical"];
 const EXPENSE_TYPES = ["Revenue", "Capital"];
@@ -38,9 +39,10 @@ const INIT = {
   vendor: "",
   expenseType: "Revenue",
   expenseCategory: "",
-  amount: "",
-  gstPercentage: "0", // ✅ branch enters GST % not amount
-  gstAmount: "0", // computed from amount × gstPercentage
+  items: [], // ✅ line items drive base amount + total GST
+  amount: "", // ✅ now the SUM of item values (auto-calculated)
+  gstPercentage: "0", // kept for legacy/display; per-item GST lives in items[]
+  gstAmount: "0", // ✅ now the SUM of item GST (auto-calculated)
   tdsAmount: "0", // set by accounts during approval — sent as 0 initially
   netPayable: "",
   invoiceNumber: "",
@@ -65,6 +67,7 @@ export default function CreatePaymentRequest() {
   const [errors, setErrors] = useState({});
   const [success, setSuccess] = useState("");
   const [dupResult, setDupResult] = useState(null);
+  const [showItemErrors, setShowItemErrors] = useState(false);
 
   // ✅ Two-phase: save draft first to get ID, then allow uploads
   const [savedInvoiceId, setSavedInvoiceId] = useState(null);
@@ -108,7 +111,10 @@ export default function CreatePaymentRequest() {
   }, [form.expenseType]);
 
   // Recompute gstAmount from gstPercentage and recalculate netPayable
+  // Legacy fallback only: derive GST/net from a single amount+GST% when there
+  // are NO line items. With items, totals come from handleItemsChange instead.
   useEffect(() => {
+    if (form.items && form.items.length > 0) return;
     const amount = parseFloat(form.amount) || 0;
     const gstPct = parseFloat(form.gstPercentage) || 0;
     const gstAmount = parseFloat(((amount * gstPct) / 100).toFixed(2));
@@ -118,11 +124,30 @@ export default function CreatePaymentRequest() {
       gstAmount: gstAmount.toString(),
       netPayable: (amount + gstAmount - tds).toFixed(2),
     }));
-  }, [form.amount, form.gstPercentage]);
+  }, [form.amount, form.gstPercentage, form.items]);
 
   const set = (field) => (e) => {
     setForm((f) => ({ ...f, [field]: e.target.value }));
     if (errors[field]) setErrors((er) => ({ ...er, [field]: "" }));
+  };
+
+  // ✅ Items drive base amount + total GST; net payable = base + GST − TDS
+  const handleItemsChange = (items, totals) => {
+    setForm((f) => ({
+      ...f,
+      items,
+      amount: totals.amount,
+      gstAmount: totals.gstAmount,
+      itemsValid: totals.valid,
+      gstPercentage:
+        totals.amount > 0
+          ? parseFloat(((totals.gstAmount / totals.amount) * 100).toFixed(2))
+          : 0,
+      netPayable: (totals.grandTotal - (parseFloat(f.tdsAmount) || 0)).toFixed(
+        2,
+      ),
+    }));
+    if (errors.items) setErrors((er) => ({ ...er, items: "" }));
   };
 
   const validateStep = (s) => {
@@ -135,8 +160,13 @@ export default function CreatePaymentRequest() {
         e.expenseCategory = "Expense category is required";
     }
     if (s === 1) {
-      if (!form.amount || parseFloat(form.amount) <= 0)
-        e.amount = "Valid amount is required";
+      if (!form.itemsValid) {
+        e.items =
+          "Please add at least one item and fix the highlighted errors below";
+        setShowItemErrors(true);
+      } else {
+        setShowItemErrors(false);
+      }
     }
     if (s === 2) {
       if (!form.invoiceNumber?.trim())
@@ -480,74 +510,39 @@ export default function CreatePaymentRequest() {
                   marginBottom: 18,
                 }}
               >
-                ℹ️ Enter the base amount and GST percentage. TDS will be applied
-                by the accounts team during invoice approval.
+                ℹ️ Add each line item with its value and GST %. The base amount
+                and total GST are calculated automatically from the items below.
+                TDS will be applied by the accounts team during approval.
               </div>
-              <div style={S.grid2}>
-                <Field label="Base Amount (₹) *" error={errors.amount}>
-                  <div style={S.inputPrefix}>
-                    <span style={S.prefix}>₹</span>
-                    <input
-                      style={{
-                        ...S.input,
-                        ...S.inputWithPrefix,
-                        ...(errors.amount ? S.inputError : {}),
-                      }}
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={form.amount}
-                      onChange={set("amount")}
-                      placeholder="0.00"
-                    />
-                  </div>
-                </Field>
-                <Field label="GST Percentage (%)">
-                  <div style={S.inputPrefix}>
-                    <span style={S.prefix}>%</span>
-                    <input
-                      style={{ ...S.input, ...S.inputWithPrefix }}
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      value={form.gstPercentage}
-                      onChange={set("gstPercentage")}
-                      placeholder="0"
-                    />
-                  </div>
-                  {parseFloat(form.gstPercentage) > 0 && form.amount && (
-                    <span
-                      style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}
-                    >
-                      GST Amount: ₹
-                      {parseFloat(form.gstAmount || 0).toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
-                  )}
-                </Field>
-                <div style={{ gridColumn: "1 / -1" }}>
-                  <div style={S.netPayableBox}>
-                    <div>
-                      <div style={S.netLabel}>Estimated Net Payable</div>
-                      <div style={S.netFormula}>
-                        Base (₹
-                        {parseFloat(form.amount || 0).toLocaleString("en-IN")})
-                        + GST {form.gstPercentage || 0}% (₹
-                        {parseFloat(form.gstAmount || 0).toLocaleString(
-                          "en-IN",
-                        )}
-                        ) − TDS (set by accounts)
-                      </div>
+
+              <InvoiceItemsEditor
+                value={form.items}
+                onChange={handleItemsChange}
+                showErrors={showItemErrors}
+              />
+              {errors.items && (
+                <div style={{ fontSize: 13, color: "#dc2626", marginTop: 8 }}>
+                  {errors.items}
+                </div>
+              )}
+
+              <div style={{ marginTop: 18 }}>
+                <div style={S.netPayableBox}>
+                  <div>
+                    <div style={S.netLabel}>Estimated Net Payable</div>
+                    <div style={S.netFormula}>
+                      Base (₹
+                      {parseFloat(form.amount || 0).toLocaleString("en-IN")}) +
+                      GST (₹
+                      {parseFloat(form.gstAmount || 0).toLocaleString("en-IN")})
+                      − TDS (set by accounts)
                     </div>
-                    <div style={S.netValue}>
-                      ₹
-                      {parseFloat(form.netPayable || 0).toLocaleString(
-                        "en-IN",
-                        { minimumFractionDigits: 2 },
-                      )}
-                    </div>
+                  </div>
+                  <div style={S.netValue}>
+                    ₹
+                    {parseFloat(form.netPayable || 0).toLocaleString("en-IN", {
+                      minimumFractionDigits: 2,
+                    })}
                   </div>
                 </div>
               </div>
@@ -667,7 +662,13 @@ export default function CreatePaymentRequest() {
                     value={`₹${parseFloat(form.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
                   />
                   <ReviewRow
-                    label={`GST (${form.gstPercentage || 0}%)`}
+                    label={`Total GST${
+                      form.items?.length
+                        ? ` (${form.items.length} item${
+                            form.items.length > 1 ? "s" : ""
+                          })`
+                        : ""
+                    }`}
                     value={`₹${parseFloat(form.gstAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
                   />
                   <ReviewRow label="TDS" value="Set by accounts" />
