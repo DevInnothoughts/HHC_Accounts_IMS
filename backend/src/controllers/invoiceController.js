@@ -311,15 +311,28 @@ exports.approveInvoice = async (req, res) => {
       }
 
       await completeSLATracking(invoice._id);
+      // AFTER
     } else {
       // Notify next role
       await startSLATracking(invoice._id, step.nextStatus);
       const nextStep = getWorkflowStep(step.nextStatus);
       if (nextStep) {
-        const nextUsers = await User.find({
+        // ✅ Branch-scope the notification for branch-bound roles so only
+        //    approvers assigned to this invoice's branch are notified.
+        const branchScopedNotifyRoles = [
+          ROLES.BRANCH_PARTNER,
+          ROLES.ACCOUNTS,
+          ROLES.CLUSTER_HEAD,
+        ];
+        const nextUsersQuery = {
           role: nextStep.actingRole,
           status: "active",
-        });
+        };
+        if (branchScopedNotifyRoles.includes(nextStep.actingRole)) {
+          nextUsersQuery.branches = invoice.branch._id || invoice.branch;
+        }
+        const nextUsers = await User.find(nextUsersQuery);
+
         for (const u of nextUsers) {
           await sendNotificationEmail(
             u.email,
@@ -518,6 +531,7 @@ exports.getInvoices = async (req, res) => {
       ROLES.BRANCH_USER,
       ROLES.BRANCH_PARTNER,
       ROLES.ACCOUNTS,
+      ROLES.CLUSTER_HEAD,
     ];
 
     if (branchScopedRoles.includes(req.user.role)) {
@@ -577,7 +591,12 @@ exports.getInvoiceById = async (req, res) => {
       .populate("rejectionHistory.rejectedBy", "name email role");
 
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
-    const branchScopedRoles = ["branch_user", "branch_partner", "accounts"];
+    const branchScopedRoles = [
+      "branch_user",
+      "branch_partner",
+      "accounts",
+      "cluster_head",
+    ];
     if (branchScopedRoles.includes(req.user.role)) {
       const allowed = req.user.branches.map((b) => b._id.toString());
       const recordBranch = (invoice.branch?._id || invoice.branch)?.toString();

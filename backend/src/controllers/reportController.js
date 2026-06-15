@@ -19,10 +19,12 @@ const buildReportBranchScope = (user) => {
 exports.getDashboardStats = async (req, res) => {
   try {
     const role = req.user.role;
-    // AFTER
-    const branchFilter = ["branch_user", "branch_partner", "accounts"].includes(
-      role,
-    )
+    const branchFilter = [
+      "branch_user",
+      "branch_partner",
+      "accounts",
+      "cluster_head",
+    ].includes(role)
       ? { branch: { $in: req.user.branches.map((b) => b._id) } }
       : {};
 
@@ -204,9 +206,12 @@ exports.getDashboardStats = async (req, res) => {
 // Helper — what needs action from this role right now
 async function getPendingActionsForRole(role, user) {
   // AFTER
-  const branchFilter = ["branch_user", "branch_partner", "accounts"].includes(
-    role,
-  )
+  const branchFilter = [
+    "branch_user",
+    "branch_partner",
+    "accounts",
+    "cluster_head",
+  ].includes(role)
     ? { branch: { $in: user.branches.map((b) => b._id) } }
     : {};
 

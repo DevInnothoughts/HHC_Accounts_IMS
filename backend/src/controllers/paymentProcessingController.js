@@ -27,6 +27,7 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       ROLES.BRANCH_USER,
       ROLES.BRANCH_PARTNER,
       ROLES.ACCOUNTS,
+      ROLES.CLUSTER_HEAD,
     ];
     if (branchScopedRoles.includes(req.user.role)) {
       const assigned = req.user.branches.map((b) => b._id.toString());
@@ -74,6 +75,7 @@ exports.getPayments = async (req, res) => {
       ROLES.BRANCH_USER,
       ROLES.BRANCH_PARTNER,
       ROLES.ACCOUNTS,
+      ROLES.CLUSTER_HEAD,
     ];
     if (branchScopedRoles.includes(req.user.role)) {
       const assigned = req.user.branches.map((b) => b._id.toString());
@@ -600,7 +602,12 @@ exports.getPaymentById = async (req, res) => {
       .populate("rejectionHistory.rejectedBy", "name email role");
 
     if (!payment) return res.status(404).json({ message: "Payment not found" });
-    const branchScopedRoles = ["branch_user", "branch_partner", "accounts"];
+    const branchScopedRoles = [
+      "branch_user",
+      "branch_partner",
+      "accounts",
+      "cluster_head",
+    ];
     if (branchScopedRoles.includes(req.user.role)) {
       const allowed = req.user.branches.map((b) => b._id.toString());
       const recordBranch = (invoice.branch?._id || payment.branch)?.toString();
