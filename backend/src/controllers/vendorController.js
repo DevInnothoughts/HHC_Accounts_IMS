@@ -17,11 +17,19 @@ exports.getVendors = async (req, res) => {
     } = req.query;
     const query = {};
 
-    if (
-      req.user.role === ROLES.BRANCH_USER ||
-      req.user.role === ROLES.BRANCH_PARTNER
-    ) {
-      query.branch = { $in: req.user.branches.map((b) => b._id) };
+    const branchScopedRoles = [
+      ROLES.BRANCH_USER,
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+    ];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const assigned = req.user.branches.map((b) => b._id.toString());
+      // Restrict to assigned branches; honor ?branch only if it's one of theirs
+      if (branch && assigned.includes(branch.toString())) {
+        query.branch = branch;
+      } else {
+        query.branch = { $in: req.user.branches.map((b) => b._id) };
+      }
     } else if (branch) {
       query.branch = branch;
     }
@@ -67,6 +75,20 @@ exports.getVendorById = async (req, res) => {
       .populate("approvedBy", "name email")
       .populate("rejectedBy", "name email");
     if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+    const branchScopedRoles = [
+      ROLES.BRANCH_USER,
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+    ];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const allowed = req.user.branches.map((b) => b._id.toString());
+      const vendorBranch = (vendor.branch?._id || vendor.branch)?.toString();
+      if (!allowed.includes(vendorBranch)) {
+        return res
+          .status(403)
+          .json({ message: "You do not have access to this vendor" });
+      }
+    }
     res.json(vendor);
   } catch (err) {
     res.status(500).json({ message: err.message });

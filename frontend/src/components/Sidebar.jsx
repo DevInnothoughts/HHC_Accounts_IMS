@@ -26,7 +26,7 @@ const navItems = [
     label: "Branches",
     path: "/branches",
     icon: "🏥",
-    roles: ["super_admin", "accounts"],
+    roles: ["super_admin"],
   },
   { label: "Users", path: "/users", icon: "👥", roles: ["super_admin"] },
   {

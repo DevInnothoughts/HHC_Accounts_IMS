@@ -163,7 +163,7 @@ export default function App() {
           <Route
             path="/branches"
             element={
-              <ProtectedRoute roles={["super_admin", "accounts"]}>
+              <ProtectedRoute roles={["super_admin"]}>
                 <BranchManagement />
               </ProtectedRoute>
             }

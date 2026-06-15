@@ -22,8 +22,19 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       paymentRequest: { $ne: null }, // has a payment record
     };
 
-    if ([ROLES.BRANCH_USER, ROLES.BRANCH_PARTNER].includes(req.user.role)) {
-      query.branch = { $in: req.user.branches.map((b) => b._id) };
+    // AFTER
+    const branchScopedRoles = [
+      ROLES.BRANCH_USER,
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+    ];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const assigned = req.user.branches.map((b) => b._id.toString());
+      if (branch && assigned.includes(branch.toString())) {
+        query.branch = branch;
+      } else {
+        query.branch = { $in: req.user.branches.map((b) => b._id) };
+      }
     } else if (branch) {
       query.branch = branch;
     }
@@ -58,8 +69,19 @@ exports.getPayments = async (req, res) => {
     const { status, branch, page = 1, limit = 20 } = req.query;
     const query = {};
 
-    if ([ROLES.BRANCH_USER, ROLES.BRANCH_PARTNER].includes(req.user.role)) {
-      query.branch = { $in: req.user.branches.map((b) => b._id) };
+    // AFTER
+    const branchScopedRoles = [
+      ROLES.BRANCH_USER,
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+    ];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const assigned = req.user.branches.map((b) => b._id.toString());
+      if (branch && assigned.includes(branch.toString())) {
+        query.branch = branch;
+      } else {
+        query.branch = { $in: req.user.branches.map((b) => b._id) };
+      }
     } else if (branch) {
       query.branch = branch;
     }
@@ -578,6 +600,16 @@ exports.getPaymentById = async (req, res) => {
       .populate("rejectionHistory.rejectedBy", "name email role");
 
     if (!payment) return res.status(404).json({ message: "Payment not found" });
+    const branchScopedRoles = ["branch_user", "branch_partner", "accounts"];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const allowed = req.user.branches.map((b) => b._id.toString());
+      const recordBranch = (invoice.branch?._id || payment.branch)?.toString();
+      if (!allowed.includes(recordBranch)) {
+        return res
+          .status(403)
+          .json({ message: "You do not have access to this record" });
+      }
+    }
     res.json(payment);
   } catch (err) {
     res.status(500).json({ message: err.message });

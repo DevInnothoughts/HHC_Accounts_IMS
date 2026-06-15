@@ -513,11 +513,26 @@ exports.getInvoices = async (req, res) => {
     } = req.query;
     const query = {};
 
-    if ([ROLES.BRANCH_USER, ROLES.BRANCH_PARTNER].includes(req.user.role)) {
-      query.branch = { $in: req.user.branches.map((b) => b._id) };
+    // AFTER
+    const branchScopedRoles = [
+      ROLES.BRANCH_USER,
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+    ];
+
+    if (branchScopedRoles.includes(req.user.role)) {
+      const assigned = req.user.branches.map((b) => b._id.toString());
+      // Restrict to assigned branches; honor an explicit ?branch only if it's one of theirs
+      if (branch && assigned.includes(branch.toString())) {
+        query.branch = branch;
+      } else {
+        query.branch = { $in: req.user.branches.map((b) => b._id) };
+      }
+    } else if (branch) {
+      // super_admin / director may filter by any branch
+      query.branch = branch;
     }
     if (status) query.status = status;
-    if (branch) query.branch = branch;
     if (priority) query.priority = priority;
     if (from || to) {
       query.createdAt = {
@@ -562,6 +577,16 @@ exports.getInvoiceById = async (req, res) => {
       .populate("rejectionHistory.rejectedBy", "name email role");
 
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    const branchScopedRoles = ["branch_user", "branch_partner", "accounts"];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const allowed = req.user.branches.map((b) => b._id.toString());
+      const recordBranch = (invoice.branch?._id || invoice.branch)?.toString();
+      if (!allowed.includes(recordBranch)) {
+        return res
+          .status(403)
+          .json({ message: "You do not have access to this record" });
+      }
+    }
     res.json(invoice);
   } catch (err) {
     res.status(500).json({ message: err.message });

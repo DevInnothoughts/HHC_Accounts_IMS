@@ -8,11 +8,21 @@ const Branch = require("../models/Branch");
 const User = require("../models/User");
 const AuditLog = require("../models/AuditLog");
 
+// Returns a branch-scope match for branch-restricted roles, or {} for unrestricted roles.
+const buildReportBranchScope = (user) => {
+  const branchScopedRoles = ["branch_user", "branch_partner", "accounts"];
+  if (!branchScopedRoles.includes(user.role)) return {}; // super_admin / director → all branches
+  return { branch: { $in: (user.branches || []).map((b) => b._id) } };
+};
+
 // ── Dashboard Stats ────────────────────────────────────────
 exports.getDashboardStats = async (req, res) => {
   try {
     const role = req.user.role;
-    const branchFilter = ["branch_user", "branch_partner"].includes(role)
+    // AFTER
+    const branchFilter = ["branch_user", "branch_partner", "accounts"].includes(
+      role,
+    )
       ? { branch: { $in: req.user.branches.map((b) => b._id) } }
       : {};
 
@@ -123,10 +133,19 @@ exports.getDashboardStats = async (req, res) => {
     if (!["branch_user", "branch_partner"].includes(role)) {
       const [totalVendors, pendingVendors, approvedVendors, rejectedVendors] =
         await Promise.all([
-          Vendor.countDocuments(),
-          Vendor.countDocuments({ approvalStatus: "pending_approval" }),
-          Vendor.countDocuments({ approvalStatus: "approved" }),
-          Vendor.countDocuments({ approvalStatus: "rejected" }),
+          Vendor.countDocuments(branchFilter),
+          Vendor.countDocuments({
+            ...branchFilter,
+            approvalStatus: "pending_approval",
+          }),
+          Vendor.countDocuments({
+            ...branchFilter,
+            approvalStatus: "approved",
+          }),
+          Vendor.countDocuments({
+            ...branchFilter,
+            approvalStatus: "rejected",
+          }),
         ]);
       vendorStats = {
         total: totalVendors,
@@ -184,17 +203,30 @@ exports.getDashboardStats = async (req, res) => {
 
 // Helper — what needs action from this role right now
 async function getPendingActionsForRole(role, user) {
-  const branchFilter = ["branch_user", "branch_partner"].includes(role)
+  // AFTER
+  const branchFilter = ["branch_user", "branch_partner", "accounts"].includes(
+    role,
+  )
     ? { branch: { $in: user.branches.map((b) => b._id) } }
     : {};
 
   const actions = [];
 
+  // AFTER
   if (role === "accounts") {
     const [invoiceApprove, paymentApprove, vendorApprove] = await Promise.all([
-      InvoiceRequest.countDocuments({ status: "Partner Approved" }), // accounts acts after partner now
-      PaymentProcessing.countDocuments({ status: "Payment Raised" }),
-      Vendor.countDocuments({ approvalStatus: "pending_approval" }),
+      InvoiceRequest.countDocuments({
+        ...branchFilter,
+        status: "Partner Approved",
+      }),
+      PaymentProcessing.countDocuments({
+        ...branchFilter,
+        status: "Payment Raised",
+      }),
+      Vendor.countDocuments({
+        ...branchFilter,
+        approvalStatus: "pending_approval",
+      }),
     ]);
     if (invoiceApprove > 0)
       actions.push({
@@ -289,16 +321,20 @@ async function getPendingActionsForRole(role, user) {
 // ── Financial Report ───────────────────────────────────────
 exports.getFinancialReport = async (req, res) => {
   try {
+    // AFTER
     const { from, to } = req.query;
     const dateFilter = {};
     if (from) dateFilter.$gte = new Date(from);
     if (to) dateFilter.$lte = new Date(new Date(to).setHours(23, 59, 59));
 
-    const invoiceMatch = Object.keys(dateFilter).length
-      ? { createdAt: dateFilter }
-      : {};
+    const branchScope = buildReportBranchScope(req.user); // ✅ branch restriction
+
+    const invoiceMatch = {
+      ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+      ...branchScope,
+    };
     const paymentMatch = {
-      ...invoiceMatch,
+      ...invoiceMatch, // inherits both date + branch scope
       status: { $in: ["Accounts Approved", "Excel Generated"] },
     };
 
@@ -464,13 +500,17 @@ exports.getFinancialReport = async (req, res) => {
 // ── Excel Export: Financial Report ────────────────────────
 exports.exportFinancialExcel = async (req, res) => {
   try {
+    // AFTER
     const { from, to } = req.query;
     const dateFilter = {};
     if (from) dateFilter.$gte = new Date(from);
     if (to) dateFilter.$lte = new Date(new Date(to).setHours(23, 59, 59));
-    const invoiceMatch = Object.keys(dateFilter).length
-      ? { createdAt: dateFilter }
-      : {};
+
+    const branchScope = buildReportBranchScope(req.user); // ✅ branch restriction
+    const invoiceMatch = {
+      ...(Object.keys(dateFilter).length ? { createdAt: dateFilter } : {}),
+      ...branchScope,
+    };
 
     const ExcelJS = require("exceljs");
     const workbook = new ExcelJS.Workbook();

@@ -53,6 +53,16 @@ exports.getSLADashboard = async (req, res) => {
     }
     // super_admin sees all stages
 
+    // ✅ NEW: branch scoping — accounts only sees SLA records for
+    //    invoices belonging to their assigned branches.
+    if (role === "accounts") {
+      const branchIds = req.user.branches.map((b) => b._id);
+      const invoiceIds = await InvoiceRequest.distinct("_id", {
+        branch: { $in: branchIds },
+      });
+      query.paymentRequest = { $in: invoiceIds }; // SLATracking.paymentRequest → InvoiceRequest._id
+    }
+
     const trackings = await SLATracking.find(query)
       .populate({
         path: "paymentRequest",
@@ -85,6 +95,24 @@ exports.getSLADashboard = async (req, res) => {
 
 exports.getInvoiceSLAStatus = async (req, res) => {
   try {
+    const invoice = await InvoiceRequest.findById(req.params.invoiceId).select(
+      "branch",
+    );
+    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+    // ✅ Branch access guard — branch-scoped roles can only view SLA
+    //    status for invoices in their assigned branches.
+    const branchScopedRoles = ["branch_user", "branch_partner", "accounts"];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const allowed = req.user.branches.map((b) => b._id.toString());
+      const invoiceBranch = (invoice.branch?._id || invoice.branch)?.toString();
+      if (!allowed.includes(invoiceBranch)) {
+        return res
+          .status(403)
+          .json({ message: "You do not have access to this invoice" });
+      }
+    }
+
     const slaStatus = await getSLAStatus(req.params.invoiceId);
     res.json(slaStatus);
   } catch (err) {

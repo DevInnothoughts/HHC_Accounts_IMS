@@ -4,12 +4,14 @@
 const Branch = require("../models/Branch");
 const { logAction } = require("../services/auditService");
 
+// AFTER
 exports.getBranches = async (req, res) => {
   try {
     const query = {};
 
-    // ✅ Only filter by user's branches for non-admin roles
-    if (req.user.role !== "super_admin" && req.user.role !== "accounts") {
+    // ✅ Only super_admin sees all branches; everyone else (incl. accounts)
+    //    is scoped to their assigned branches
+    if (req.user.role !== "super_admin") {
       query._id = { $in: req.user.branches };
     }
 
