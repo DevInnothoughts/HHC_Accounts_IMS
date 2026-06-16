@@ -9,11 +9,7 @@ router.use(authenticate);
 router.get("/approved-invoices", ctrl.getApprovedInvoicesForPayment);
 router.get("/", ctrl.getPayments);
 router.get("/:id", ctrl.getPaymentById);
-router.post(
-  "/raise/:invoiceId",
-  roleGuard(ROLES.BRANCH_USER),
-  ctrl.raisePayment,
-);
+router.post("/raise/:invoiceId", roleGuard(ROLES.ACCOUNTS), ctrl.raisePayment);
 router.patch("/:id/approve", roleGuard(ROLES.ACCOUNTS), ctrl.approvePayment);
 router.patch("/:id/reject", roleGuard(ROLES.ACCOUNTS), ctrl.rejectPayment);
 router.post(

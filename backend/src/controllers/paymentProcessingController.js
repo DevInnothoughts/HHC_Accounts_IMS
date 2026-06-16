@@ -191,14 +191,16 @@ exports.raisePayment = async (req, res) => {
       scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
     };
 
-    payment.installments.push(installment);
-    payment.status = "Payment Raised";
-    payment.currentStage = "accounts";
     payment.paymentType = isPartial ? "partial" : "full";
     payment.paymentAmount = amount;
     payment.paymentRemarks = paymentRemarks || "";
     payment.scheduledDate = scheduledDate ? new Date(scheduledDate) : null;
     payment.raisedBy = req.user._id;
+    payment.totalAmount = payment.totalAmount || invoice.netPayable; // ✅ ensure required field is set
+    payment.remainingAmount = payment.totalAmount - (payment.paidAmount || 0);
+    payment.installments.push(installment);
+    payment.status = "Payment Raised";
+    payment.currentStage = "accounts";
     await payment.save();
 
     // Notify accounts
@@ -209,9 +211,9 @@ exports.raisePayment = async (req, res) => {
     for (const u of accountsUsers) {
       await sendNotificationEmail(
         u.email,
-        `💳 ${isPartial ? "Partial " : ""}Payment Request: ${installmentId}`,
+        `💳 ${isPartial ? "Partial " : ""}Payment Request Raised: ${installmentId}`,
         `
-          <p>Branch raised a ${isPartial ? "<strong>partial</strong>" : "full"} payment request.</p>
+          <p>A ${isPartial ? "<strong>partial</strong>" : "full"} payment request has been raised.</p>
           <table style="width:100%;border-collapse:collapse;margin-top:12px;">
             <tr><td style="padding:6px;color:#666;">Installment ID</td><td style="padding:6px;font-weight:600;">${installmentId}</td></tr>
             <tr><td style="padding:6px;color:#666;">Invoice</td><td style="padding:6px;font-weight:600;">${invoice.requestId}</td></tr>
@@ -610,7 +612,7 @@ exports.getPaymentById = async (req, res) => {
     ];
     if (branchScopedRoles.includes(req.user.role)) {
       const allowed = req.user.branches.map((b) => b._id.toString());
-      const recordBranch = (invoice.branch?._id || payment.branch)?.toString();
+      const recordBranch = (payment.branch?._id || payment.branch)?.toString();
       if (!allowed.includes(recordBranch)) {
         return res
           .status(403)

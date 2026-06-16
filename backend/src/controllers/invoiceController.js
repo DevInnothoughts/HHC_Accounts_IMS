@@ -285,12 +285,12 @@ exports.approveInvoice = async (req, res) => {
         invoiceRequest: invoice._id,
         branch: invoice.branch._id || invoice.branch,
         vendor: invoice.vendor._id || invoice.vendor,
-        totalAmount: invoice.netPayable, // ✅ store total
+        totalAmount: invoice.netPayable,
         paymentAmount: invoice.netPayable,
         paidAmount: 0,
         remainingAmount: invoice.netPayable,
         status: "Payment Pending",
-        currentStage: "branch",
+        currentStage: "accounts", // ✅ was "branch" — now accounts handles it
         raisedBy: invoice.createdBy._id || invoice.createdBy,
       });
 
@@ -298,15 +298,14 @@ exports.approveInvoice = async (req, res) => {
       invoice.paymentRequest = payment._id;
       await invoice.save();
 
-      // Notify branch user invoice is fully approved
+      // Notify account user that invoice is fully approved
+      // AFTER
       if (invoice.createdBy?.email) {
         await sendNotificationEmail(
           invoice.createdBy.email,
           `✅ Invoice Approved: ${invoice.requestId}`,
-          `
-            <p>Your invoice <strong>${invoice.requestId}</strong> has been fully approved by the Cluster Head.</p>
-            <p>You can now raise a payment request for this invoice in the <strong>Payment Processing</strong> section.</p>
-          `,
+          `<p>Your invoice <strong>${invoice.requestId}</strong> has been fully approved by the Cluster Head.</p>
+     <p>It has been forwarded to the <strong>Accounts team</strong> for payment processing — no further action is needed from you.</p>`,
         ).catch(console.error);
       }
 

@@ -266,11 +266,7 @@ export default function VendorDetail() {
           <InfoCard title="🏦 Bank Details">
             <Row label="Account Holder" value={vendor.accountHolderName} />
             <Row label="Bank Name" value={vendor.bankName} />
-            <Row
-              label="Account Number"
-              value={`****${vendor.accountNumber?.slice(-4)}`}
-              mono
-            />
+            <Row label="Account Number" value={vendor.accountNumber} mono />
             <Row label="IFSC Code" value={vendor.ifscCode} mono />
             <Row label="UPI ID" value={vendor.upiId || "—"} />
           </InfoCard>

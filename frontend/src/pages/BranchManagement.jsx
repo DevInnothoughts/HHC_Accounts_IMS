@@ -10,8 +10,8 @@ const INIT_BRANCH = {
   name: "",
   code: "",
   location: "",
-  clusterHead: "",
-  partner: "",
+  // clusterHead: "",
+  // partner: "",
   monthlyBudget: "",
   status: "active",
 };
@@ -53,25 +53,25 @@ export default function BranchManagement() {
     fetchBranches();
   }, [fetchBranches]);
 
-  useEffect(() => {
-    api
-      .get("/users?role=cluster_head&limit=100")
-      .then((r) =>
-        setUsers(Array.isArray(r.data) ? r.data : r.data.users || []),
-      )
-      .catch(console.error);
+  // useEffect(() => {
+  //   api
+  //     .get("/users?role=cluster_head&limit=100")
+  //     .then((r) =>
+  //       setUsers(Array.isArray(r.data) ? r.data : r.data.users || []),
+  //     )
+  //     .catch(console.error);
 
-    api
-      .get("/users?role=branch_partner&limit=100")
-      .then((r) => {
-        const incoming = Array.isArray(r.data) ? r.data : r.data.users || [];
-        setUsers((u) => {
-          const existing = u.map((x) => x._id);
-          return [...u, ...incoming.filter((x) => !existing.includes(x._id))];
-        });
-      })
-      .catch(console.error);
-  }, []);
+  //   api
+  //     .get("/users?role=branch_partner&limit=100")
+  //     .then((r) => {
+  //       const incoming = Array.isArray(r.data) ? r.data : r.data.users || [];
+  //       setUsers((u) => {
+  //         const existing = u.map((x) => x._id);
+  //         return [...u, ...incoming.filter((x) => !existing.includes(x._id))];
+  //       });
+  //     })
+  //     .catch(console.error);
+  // }, []);
 
   const set = (f) => (e) => {
     setForm((fm) => ({ ...fm, [f]: e.target.value }));
@@ -93,8 +93,8 @@ export default function BranchManagement() {
     try {
       const payload = {
         ...form,
-        ...(form.clusterHead === "" && { clusterHead: null }),
-        ...(form.partner === "" && { partner: null }),
+        // ...(form.clusterHead === "" && { clusterHead: null }),
+        //...(form.partner === "" && { partner: null }),
       };
       if (modal === "create") {
         await api.post("/branches", payload);
@@ -126,16 +126,16 @@ export default function BranchManagement() {
   const openEdit = (b) => {
     setForm({
       ...b,
-      clusterHead: b.clusterHead?._id || "",
-      partner: b.partner?._id || "",
+      //clusterHead: b.clusterHead?._id || "",
+      //partner: b.partner?._id || "",
       monthlyBudget: b.monthlyBudget || "",
     });
     setErrors({});
     setModal("edit");
   };
 
-  const clusterHeads = users.filter((u) => u.role === "cluster_head");
-  const partners = users.filter((u) => u.role === "branch_partner");
+  //const clusterHeads = users.filter((u) => u.role === "cluster_head");
+  //const partners = users.filter((u) => u.role === "branch_partner");
 
   return (
     <div style={S.layout}>
@@ -341,7 +341,7 @@ export default function BranchManagement() {
                     placeholder="City, State"
                   />
                 </MField>
-                <MField label="Cluster Head">
+                {/* <MField label="Cluster Head">
                   <select
                     style={S.input}
                     value={form.clusterHead}
@@ -368,7 +368,7 @@ export default function BranchManagement() {
                       </option>
                     ))}
                   </select>
-                </MField>
+                </MField> */}
                 <MField label="Monthly Budget (₹)">
                   <div style={{ position: "relative" }}>
                     <span

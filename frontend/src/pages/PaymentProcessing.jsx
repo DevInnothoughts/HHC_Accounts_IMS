@@ -268,7 +268,8 @@ export default function PaymentProcessing() {
               <div>
                 <div style={S.infoBox}>
                   ℹ️ These invoices are fully approved by Cluster Head and ready
-                  for payment. Branch users can raise a payment request.
+                  for payment. The Accounts team can raise and process the
+                  payment.
                 </div>
                 <div style={S.tableCard}>
                   <table style={S.table}>
@@ -297,7 +298,7 @@ export default function PaymentProcessing() {
                           STATUS_STYLES[pay?.status] ||
                           STATUS_STYLES["Payment Pending"];
                         const canRaise =
-                          isBranch &&
+                          isAccounts &&
                           [
                             "Payment Pending",
                             "Partially Paid",
