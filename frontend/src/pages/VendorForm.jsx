@@ -5,6 +5,7 @@ import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import FileUpload from "../components/FileUpload.jsx";
+import SearchableSelect from "../components/SearchableSelect.jsx";
 
 const VENDOR_CATEGORIES = [
   "Service Vendors",
@@ -114,6 +115,10 @@ export default function VendorForm() {
     if (errors[field]) setErrors((er) => ({ ...er, [field]: "" }));
   };
 
+  const setField = (field, val) => {
+    setForm((f) => ({ ...f, [field]: val }));
+    if (errors[field]) setErrors((er) => ({ ...er, [field]: "" }));
+  };
   const validate = () => {
     const e = {};
     if (!form.branch) e.branch = "Branch is required";
@@ -332,25 +337,18 @@ export default function VendorForm() {
                 <h2 style={S.sectionTitle}>👤 Personal Details</h2>
                 <div style={S.grid2}>
                   <Field label="Branch *" error={errors.branch}>
-                    <select
-                      style={{
-                        ...S.input,
-                        ...(errors.branch ? S.inputError : {}),
-                      }}
+                    <SearchableSelect
+                      options={branches}
                       value={form.branch}
-                      onChange={set("branch")}
+                      onChange={(val) => setField("branch", val)}
+                      getOptionLabel={(b) => `${b.name} (${b.code})`}
+                      placeholder="Select Branch"
+                      error={!!errors.branch}
                       disabled={
                         user?.role === "branch_user" &&
                         user.branches?.length === 1
                       }
-                    >
-                      <option value="">Select Branch</option>
-                      {branches.map((b) => (
-                        <option key={b._id} value={b._id}>
-                          {b.name} ({b.code})
-                        </option>
-                      ))}
-                    </select>
+                    />
                   </Field>
                   <Field label="Vendor Name *" error={errors.vendorName}>
                     <input
@@ -402,21 +400,15 @@ export default function VendorForm() {
                 <h2 style={S.sectionTitle}>🏢 Business Details</h2>
                 <div style={S.grid2}>
                   <Field label="Vendor Category" error={errors.vendorCategory}>
-                    <select
-                      style={{
-                        ...S.input,
-                        ...(errors.vendorCategory ? S.inputError : {}),
-                      }}
+                    <SearchableSelect
+                      options={VENDOR_CATEGORIES}
                       value={form.vendorCategory}
-                      onChange={set("vendorCategory")}
-                    >
-                      <option value="">Select Category (Optional)</option>
-                      {VENDOR_CATEGORIES.map((c) => (
-                        <option key={c} value={c}>
-                          {c}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(val) => setField("vendorCategory", val)}
+                      getOptionValue={(c) => c}
+                      getOptionLabel={(c) => c}
+                      placeholder="Select Category (Optional)"
+                      error={!!errors.vendorCategory}
+                    />
                   </Field>
                   <Field label="MSME Number (Optional)">
                     <input

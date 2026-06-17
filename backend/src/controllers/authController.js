@@ -10,7 +10,7 @@ const generateOTP = () => crypto.randomInt(100000, 999999).toString();
 
 const generateTokens = (userId) => {
   const accessToken = jwt.sign({ id: userId }, process.env.JWT_SECRET, {
-    expiresIn: "8h",
+    expiresIn: "6h", // was "8h"
   });
   const refreshToken = jwt.sign(
     { id: userId },

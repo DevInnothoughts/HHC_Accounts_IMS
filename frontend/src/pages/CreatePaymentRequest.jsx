@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import DuplicateInvoiceChecker from "../components/DuplicateInvoiceChecker.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import InvoiceItemsEditor from "../components/InvoiceItemsEditor.jsx";
+import SearchableSelect from "../components/SearchableSelect.jsx";
 
 const PRIORITY_OPTIONS = ["Normal", "Urgent", "Critical"];
 const EXPENSE_TYPES = ["Revenue", "Capital"];
@@ -129,6 +130,11 @@ export default function CreatePaymentRequest() {
   const set = (field) => (e) => {
     setForm((f) => ({ ...f, [field]: e.target.value }));
     if (errors[field]) setErrors((er) => ({ ...er, [field]: "" }));
+  };
+
+  const setField = (field, val) => {
+    setForm((f) => ({ ...f, [field]: val }));
+    if (errors[field]) setErrors((e) => ({ ...e, [field]: "" }));
   };
 
   // ✅ Items drive base amount + total GST; net payable = base + GST − TDS
@@ -336,46 +342,34 @@ export default function CreatePaymentRequest() {
               <h2 style={S.sectionTitle}>📋 Basic Information</h2>
               <div style={S.grid2}>
                 <Field label="Branch *" error={errors.branch}>
-                  <select
-                    style={{
-                      ...S.input,
-                      ...(errors.branch ? S.inputError : {}),
-                    }}
+                  {/* Branch */}
+                  <SearchableSelect
+                    options={branches}
                     value={form.branch}
-                    onChange={set("branch")}
+                    onChange={(val) => setField("branch", val)}
+                    getOptionLabel={(b) => `${b.name} (${b.code})`}
+                    placeholder="Select Branch"
+                    error={!!errors.branch}
                     disabled={
                       user?.role === "branch_user" &&
                       user.branches?.length === 1
                     }
-                  >
-                    <option value="">Select Branch</option>
-                    {branches.map((b) => (
-                      <option key={b._id} value={b._id}>
-                        {b.name} ({b.code})
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </Field>
                 <Field label="Vendor *" error={errors.vendor}>
-                  <select
-                    style={{
-                      ...S.input,
-                      ...(errors.vendor ? S.inputError : {}),
-                    }}
+                  <SearchableSelect
+                    options={vendors}
                     value={form.vendor}
-                    onChange={set("vendor")}
+                    onChange={(val) => setField("vendor", val)}
+                    getOptionLabel={(v) =>
+                      `${v.vendorName}${v.companyName ? " — " + v.companyName : ""}`
+                    }
+                    placeholder={
+                      form.branch ? "Select Vendor" : "Select branch first"
+                    }
+                    error={!!errors.vendor}
                     disabled={!form.branch}
-                  >
-                    <option value="">
-                      {form.branch ? "Select Vendor" : "Select branch first"}
-                    </option>
-                    {vendors.map((v) => (
-                      <option key={v._id} value={v._id}>
-                        {v.vendorName}
-                        {v.companyName ? ` — ${v.companyName}` : ""}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </Field>
                 {selectedVendor && (
                   <div style={{ ...S.vendorPreview, gridColumn: "1 / -1" }}>
@@ -435,21 +429,14 @@ export default function CreatePaymentRequest() {
                   label="Expense Category *"
                   error={errors.expenseCategory}
                 >
-                  <select
-                    style={{
-                      ...S.input,
-                      ...(errors.expenseCategory ? S.inputError : {}),
-                    }}
+                  <SearchableSelect
+                    options={categories}
                     value={form.expenseCategory}
-                    onChange={set("expenseCategory")}
-                  >
-                    <option value="">Select Category</option>
-                    {categories.map((c) => (
-                      <option key={c._id} value={c._id}>
-                        {c.name} ({c.code})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(val) => setField("expenseCategory", val)}
+                    getOptionLabel={(c) => `${c.name} (${c.code})`}
+                    placeholder="Select Category"
+                    error={!!errors.expenseCategory}
+                  />
                 </Field>
                 <Field label="Priority *" error={errors.priority} fullWidth>
                   <div style={S.radioGroup}>
