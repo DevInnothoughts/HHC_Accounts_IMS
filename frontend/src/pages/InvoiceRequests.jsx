@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import React from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -39,10 +39,11 @@ export default function InvoiceRequests() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [searchParams] = useSearchParams();
   const [filters, setFilters] = useState({
-    status: "",
-    priority: "",
-    branch: "",
+    status: searchParams.get("status") || "",
+    priority: searchParams.get("priority") || "",
+    branch: searchParams.get("branch") || "",
   });
   const [branches, setBranches] = useState([]);
   const [actionLoading, setActionLoading] = useState("");

@@ -119,6 +119,7 @@ exports.createVendor = async (req, res) => {
     const accountsUsers = await User.find({
       role: ROLES.ACCOUNTS,
       status: "active",
+      branches: vendor.branch, // ✅ only accounts for the vendor's branch
     });
     for (const u of accountsUsers) {
       await sendNotificationEmail(
@@ -173,6 +174,7 @@ exports.updateVendor = async (req, res) => {
       const accountsUsers = await User.find({
         role: ROLES.ACCOUNTS,
         status: "active",
+        branches: vendor.branch, // ✅ branch-scoped
       });
       for (const u of accountsUsers) {
         await sendNotificationEmail(

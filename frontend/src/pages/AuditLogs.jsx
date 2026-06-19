@@ -6,7 +6,7 @@ import React from "react";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 
-const MODULES = ["", "Auth", "Payment", "Vendor", "User", "Branch"];
+const MODULES = ["", "Payment", "Vendor", "User", "Branch"];
 const ACTION_COLORS = {
   LOGIN: { bg: "#eff6ff", color: "#2563eb" },
   CREATE_PAYMENT_REQUEST: { bg: "#f0fdf4", color: "#16a34a" },

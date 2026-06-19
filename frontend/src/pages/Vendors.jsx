@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { useSearchParams } from "react-router-dom";
 
 const VENDOR_CATEGORIES = [
   "Service Vendors",
@@ -33,10 +34,12 @@ export default function Vendors() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [searchParams] = useSearchParams();
   const [filters, setFilters] = useState({
     status: "",
     category: "",
     branch: "",
+    approvalStatus: searchParams.get("approvalStatus") || "", // ✅ honor dashboard deep-links
   });
   const [branches, setBranches] = useState([]);
   const [deleteModal, setDeleteModal] = useState(null);
@@ -75,6 +78,9 @@ export default function Vendors() {
         ...(filters.status && { status: filters.status }),
         ...(filters.category && { category: filters.category }),
         ...(filters.branch && { branch: filters.branch }),
+        ...(filters.approvalStatus && {
+          approvalStatus: filters.approvalStatus,
+        }),
       });
       const { data } = await api.get(`/vendors?${params}`);
       setVendors(data.vendors);
@@ -209,7 +215,12 @@ export default function Vendors() {
             style={S.resetBtn}
             onClick={() => {
               setSearch("");
-              setFilters({ status: "", category: "", branch: "" });
+              setFilters({
+                status: "",
+                category: "",
+                branch: "",
+                approvalStatus: "",
+              });
               setPage(1);
             }}
           >

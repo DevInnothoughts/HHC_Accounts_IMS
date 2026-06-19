@@ -1,5 +1,10 @@
 const mongoose = require("mongoose");
 
+const AUDIT_RETENTION_DAYS = parseInt(
+  process.env.AUDIT_RETENTION_DAYS || "180",
+  10,
+);
+
 const auditLogSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -11,7 +16,13 @@ const auditLogSchema = new mongoose.Schema(
     ipAddress: { type: String },
     deviceInfo: { type: String },
   },
-  { timestamps: true },
+  { timestamps: true, updatedAt: false },
+);
+
+// ✅ Auto-delete logs older than the retention window; also covers the sort.
+auditLogSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: AUDIT_RETENTION_DAYS * 24 * 60 * 60 },
 );
 
 module.exports = mongoose.model("AuditLog", auditLogSchema);

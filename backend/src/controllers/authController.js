@@ -3,7 +3,6 @@ const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const OtpSession = require("../models/OtpSession");
 const { sendOTPEmail } = require("../services/emailService");
-const { logAction } = require("../services/auditService");
 const { OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS } = require("../config/constants");
 
 const generateOTP = () => crypto.randomInt(100000, 999999).toString();
@@ -83,8 +82,6 @@ exports.verifyOTP = async (req, res) => {
     await user.save();
 
     const { accessToken, refreshToken } = generateTokens(user._id);
-
-    await logAction({ userId: user._id, action: "LOGIN", module: "Auth", req });
 
     res.json({
       accessToken,

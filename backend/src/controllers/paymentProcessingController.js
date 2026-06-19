@@ -207,6 +207,7 @@ exports.raisePayment = async (req, res) => {
     const accountsUsers = await User.find({
       role: ROLES.ACCOUNTS,
       status: "active",
+      branches: invoice.branch, // ✅ only accounts assigned to this branch
     });
     for (const u of accountsUsers) {
       await sendNotificationEmail(

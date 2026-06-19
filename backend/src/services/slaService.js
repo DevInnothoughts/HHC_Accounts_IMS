@@ -135,7 +135,11 @@ const handleSLABreach = async (tracking, invoice) => {
     };
 
     const targetRole = stageRoleMap[tracking.stage];
-    const approvers = await User.find({ role: targetRole, status: "active" });
+    const approvers = await User.find({
+      role: targetRole,
+      status: "active",
+      branches: invoice.branch._id || invoice.branch,
+    });
     const notifyList = [
       ...approvers,
       ...(escalationUser ? [escalationUser] : []),
@@ -172,7 +176,11 @@ const sendSLAReminder = async (tracking, invoice, hoursRemaining) => {
     };
 
     const targetRole = stageRoleMap[tracking.stage];
-    const approvers = await User.find({ role: targetRole, status: "active" });
+    const approvers = await User.find({
+      role: targetRole,
+      status: "active",
+      branches: invoice.branch._id || invoice.branch,
+    });
 
     for (const u of approvers) {
       await sendNotificationEmail(
