@@ -110,33 +110,9 @@ exports.createVendor = async (req, res) => {
     // ✅ REQ 1: Always starts as pending_approval
     const vendor = await Vendor.create({
       ...req.body,
+      approvalStatus: "draft", // ✅ always start as draft
       createdBy: req.user._id,
-      approvalStatus: "pending_approval",
-      verifiedByAccounts: false,
     });
-
-    // Notify accounts team about new vendor pending approval
-    const accountsUsers = await User.find({
-      role: ROLES.ACCOUNTS,
-      status: "active",
-      branches: vendor.branch, // ✅ only accounts for the vendor's branch
-    });
-    for (const u of accountsUsers) {
-      await sendNotificationEmail(
-        u.email,
-        `🏢 New Vendor Pending Approval: ${vendor.vendorName}`,
-        `
-          <p>A new vendor has been added by a branch user and requires your approval.</p>
-          <table style="width:100%;border-collapse:collapse;margin-top:12px;">
-            <tr><td style="padding:6px;color:#666;">Vendor Name</td><td style="padding:6px;font-weight:600;">${vendor.vendorName}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Company</td><td style="padding:6px;font-weight:600;">${vendor.companyName || "—"}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Category</td><td style="padding:6px;font-weight:600;">${vendor.vendorCategory}</td></tr>
-            <tr><td style="padding:6px;color:#666;">PAN Number</td><td style="padding:6px;font-weight:600;">${vendor.panNumber}</td></tr>
-          </table>
-          <p style="margin-top:12px;">Please log in to review and approve or reject this vendor.</p>
-        `,
-      ).catch(console.error);
-    }
 
     await logAction({
       userId: req.user._id,
@@ -151,44 +127,89 @@ exports.createVendor = async (req, res) => {
   }
 };
 
+exports.submitVendor = async (req, res) => {
+  try {
+    const vendor = await Vendor.findById(req.params.id);
+    if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+
+    const isOwner = vendor.createdBy?.toString() === req.user._id.toString();
+    if (!isOwner && req.user.role !== ROLES.SUPER_ADMIN) {
+      return res
+        .status(403)
+        .json({ message: "Not authorized to submit this vendor" });
+    }
+    if (!["draft", "rejected"].includes(vendor.approvalStatus)) {
+      return res.status(400).json({
+        message: `Vendor is already ${vendor.approvalStatus.replace("_", " ")}`,
+      });
+    }
+
+    // ✅ PAN + cheque always required; GST cert required only if a GST number exists
+    const REQUIRED_DOCS = ["pan", "cheque"];
+    if (vendor.gstNumber?.trim()) REQUIRED_DOCS.push("gst");
+
+    const uploadedTypes = (vendor.documents || []).map((d) => d.type);
+    const missing = REQUIRED_DOCS.filter((t) => !uploadedTypes.includes(t));
+    if (missing.length) {
+      const labels = {
+        pan: "PAN Card",
+        gst: "GST Certificate",
+        cheque: "Cancelled Cheque",
+      };
+      return res.status(400).json({
+        message: `${"Upload required documents before submitting"}: ${missing.map((t) => labels[t]).join(", ")}`,
+      });
+    }
+
+    vendor.approvalStatus = "pending_approval";
+    await vendor.save();
+
+    await logAction({
+      userId: req.user._id,
+      action: "SUBMIT_VENDOR",
+      module: "Vendor",
+      targetId: vendor._id,
+      req,
+    });
+
+    // Notify accounts — branch-scoped (moved here from createVendor)
+    const accountsUsers = await User.find({
+      role: ROLES.ACCOUNTS,
+      status: "active",
+      branches: vendor.branch,
+    });
+    for (const u of accountsUsers) {
+      await sendNotificationEmail(
+        u.email,
+        `🆕 Vendor Pending Approval: ${vendor.vendorName}`,
+        `<p>Vendor <strong>${vendor.vendorName}</strong> has been submitted and is awaiting your approval.</p>`,
+      ).catch(console.error);
+    }
+
+    res.json(vendor);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 exports.updateVendor = async (req, res) => {
   try {
     const vendor = await Vendor.findById(req.params.id);
     if (!vendor) return res.status(404).json({ message: "Vendor not found" });
 
-    // ✅ REQ 1: If branch edits a rejected vendor, reset to pending_approval
-    const isRejected = vendor.approvalStatus === "rejected";
-    const isBranchUser = req.user.role === ROLES.BRANCH_USER;
-
-    const updateData = { ...req.body };
-
-    if (isRejected && isBranchUser) {
-      // Branch is resubmitting after rejection — reset approval
-      updateData.approvalStatus = "pending_approval";
-      updateData.rejectionReason = null;
-      updateData.rejectedBy = null;
-      updateData.rejectedAt = null;
-      updateData.verifiedByAccounts = false;
-
-      // Notify accounts team again
-      const accountsUsers = await User.find({
-        role: ROLES.ACCOUNTS,
-        status: "active",
-        branches: vendor.branch, // ✅ branch-scoped
+    // ✅ Approved vendors can only be edited by accounts / super_admin
+    const canEditApproved = [ROLES.ACCOUNTS, ROLES.SUPER_ADMIN].includes(
+      req.user.role,
+    );
+    if (vendor.approvalStatus === "approved" && !canEditApproved) {
+      return res.status(403).json({
+        message: "Approved vendors can only be edited by the accounts team.",
       });
-      for (const u of accountsUsers) {
-        await sendNotificationEmail(
-          u.email,
-          `🔄 Vendor Resubmitted for Approval: ${vendor.vendorName}`,
-          `<p>Vendor <strong>${vendor.vendorName}</strong> has been updated and resubmitted for approval after rejection.</p>`,
-        ).catch(console.error);
-      }
     }
 
-    const updated = await Vendor.findByIdAndUpdate(req.params.id, updateData, {
-      new: true,
-      runValidators: true,
-    });
+    Object.assign(vendor, req.body);
+    await vendor.save();
+
     await logAction({
       userId: req.user._id,
       action: "UPDATE_VENDOR",
@@ -196,9 +217,10 @@ exports.updateVendor = async (req, res) => {
       targetId: vendor._id,
       req,
     });
-    res.json(updated);
+
+    res.json(vendor);
   } catch (err) {
-    res.status(400).json({ message: err.message });
+    res.status(500).json({ message: err.message });
   }
 };
 
@@ -298,8 +320,23 @@ exports.rejectVendor = async (req, res) => {
 
 exports.deleteVendor = async (req, res) => {
   try {
-    const vendor = await Vendor.findByIdAndDelete(req.params.id);
+    const vendor = await Vendor.findById(req.params.id);
     if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+
+    // ✅ Block delete if the vendor is referenced by invoices or payments
+    const InvoiceRequest = require("../models/InvoiceRequest");
+    const PaymentProcessing = require("../models/PaymentProcessing");
+    const [invCount, payCount] = await Promise.all([
+      InvoiceRequest.countDocuments({ vendor: vendor._id }),
+      PaymentProcessing.countDocuments({ vendor: vendor._id }),
+    ]);
+    if (invCount > 0 || payCount > 0) {
+      return res.status(400).json({
+        message: `Cannot delete — this vendor is linked to ${invCount} invoice(s) and ${payCount} payment(s). Deactivate it instead.`,
+      });
+    }
+
+    await vendor.deleteOne();
     await logAction({
       userId: req.user._id,
       action: "DELETE_VENDOR",

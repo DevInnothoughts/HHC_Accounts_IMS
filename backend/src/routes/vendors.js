@@ -10,6 +10,13 @@ router.post(
   roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
   ctrl.createVendor,
 );
+
+router.patch(
+  "/:id/submit",
+  roleGuard(ROLES.BRANCH_USER, ROLES.SUPER_ADMIN),
+  ctrl.submitVendor,
+);
+
 router.put(
   "/:id",
   roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),

@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const Counter = require("./Counter");
 
 const rejectionSchema = new mongoose.Schema({
   rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
@@ -102,8 +103,8 @@ const invoiceRequestSchema = new mongoose.Schema(
 
 invoiceRequestSchema.pre("save", async function (next) {
   if (!this.requestId) {
-    const count = await mongoose.model("InvoiceRequest").countDocuments();
-    this.requestId = `INV-${String(count + 1).padStart(6, "0")}`;
+    const seq = await Counter.next("invoiceRequest");
+    this.requestId = `INV-${String(seq).padStart(6, "0")}`;
   }
   next();
 });

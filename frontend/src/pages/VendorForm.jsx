@@ -61,6 +61,11 @@ export default function VendorForm() {
   const [chequeError, setChequeError] = useState("");
   const chequeInputRef = useRef(null);
 
+  const editLocked =
+    isEdit &&
+    savedVendor?.approvalStatus === "approved" &&
+    !["accounts", "super_admin"].includes(user?.role);
+
   useEffect(() => {
     api
       .get("/branches")
@@ -160,6 +165,12 @@ export default function VendorForm() {
 
   // ✅ Save details first, then go to Documents tab
   const handleSaveDetails = async () => {
+    if (editLocked) {
+      setErrors({
+        submit: "Approved vendors can only be edited by the accounts team.",
+      });
+      return;
+    }
     if (!validate()) {
       // Jump to the first section that has an error so user can see it
       const firstErrorField = Object.keys(FIELD_SECTION).find(
@@ -218,6 +229,17 @@ export default function VendorForm() {
   };
 
   const handleFinish = async () => {
+    const status = savedVendor?.approvalStatus;
+    if (status === "draft" || status === "rejected") {
+      try {
+        const vid = savedVendorId || id;
+        const { data } = await api.patch(`/vendors/${vid}/submit`);
+        setSavedVendor(data);
+      } catch (err) {
+        setErrors({ submit: err.response?.data?.message || "Submit failed" });
+        return; // stay on the page so the error shows
+      }
+    }
     navigate("/vendors");
   };
 
@@ -331,6 +353,11 @@ export default function VendorForm() {
           {errors.submit && <div style={S.errorBox}>{errors.submit}</div>}
 
           <div style={S.formBody}>
+            {editLocked && (
+              <div style={S.warnBox}>
+                🔒 This vendor is approved. Only the accounts team can edit it.
+              </div>
+            )}
             {/* Section 0: Personal */}
             {activeSection === 0 && (
               <div>
@@ -646,6 +673,11 @@ export default function VendorForm() {
                     entityId={savedVendorId}
                     existingDocs={savedVendor?.documents || []}
                     onUploadSuccess={refreshVendor}
+                    requiredTypes={
+                      form.gstNumber?.trim()
+                        ? ["pan", "gst", "cheque"]
+                        : ["pan", "cheque"]
+                    }
                   />
                 )}
               </div>
@@ -678,7 +710,7 @@ export default function VendorForm() {
                 <button
                   style={{ ...S.submitBtn, opacity: loading ? 0.7 : 1 }}
                   onClick={handleSaveDetails}
-                  disabled={loading}
+                  disabled={loading || editLocked}
                 >
                   {loading
                     ? "Saving..."
@@ -689,7 +721,9 @@ export default function VendorForm() {
               )}
               {activeSection === 3 &&
                 (() => {
-                  const REQUIRED_DOCS = ["pan", "gst", "cheque"];
+                  const REQUIRED_DOCS = ["pan", "cheque"];
+                  if (form.gstNumber?.trim()) REQUIRED_DOCS.push("gst");
+
                   const uploadedTypes = (savedVendor?.documents || []).map(
                     (d) => d.type,
                   );
@@ -735,7 +769,11 @@ export default function VendorForm() {
                         disabled={!allUploaded}
                         onClick={handleFinish}
                       >
-                        ✓ {isEdit ? "Done" : "Finish & View Vendors"}
+                        ✓{" "}
+                        {savedVendor?.approvalStatus === "draft" ||
+                        savedVendor?.approvalStatus === "rejected"
+                          ? "Submit for Approval"
+                          : "Done"}
                       </button>
                     </div>
                   );

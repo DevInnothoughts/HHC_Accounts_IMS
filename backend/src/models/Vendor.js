@@ -44,8 +44,8 @@ const vendorSchema = new mongoose.Schema(
     documents: [documentSchema],
     approvalStatus: {
       type: String,
-      enum: ["pending_approval", "approved", "rejected"],
-      default: "pending_approval",
+      enum: ["draft", "pending_approval", "approved", "rejected"], // ✅ added "draft"
+      default: "draft", // ✅ was "pending_approval"
     },
     approvedBy: {
       type: mongoose.Schema.Types.ObjectId,

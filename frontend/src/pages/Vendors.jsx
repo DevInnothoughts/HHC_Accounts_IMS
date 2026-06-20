@@ -364,14 +364,28 @@ export default function Vendors() {
                           >
                             View
                           </button>
-                          {canManage && (
-                            <button
-                              style={{ ...S.actionBtn, color: "#2563eb" }}
-                              onClick={() => navigate(`/vendors/${v._id}/edit`)}
-                            >
-                              Edit
-                            </button>
-                          )}
+                          {(() => {
+                            const isApproved = v.approvalStatus === "approved";
+                            const canEdit = isApproved
+                              ? ["accounts", "super_admin"].includes(user?.role)
+                              : [
+                                  "branch_user",
+                                  "accounts",
+                                  "super_admin",
+                                ].includes(user?.role);
+                            if (!canEdit) return null;
+                            return (
+                              <button
+                                style={S.actionBtn}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigate(`/vendors/${v._id}/edit`);
+                                }}
+                              >
+                                ✏️ Edit
+                              </button>
+                            );
+                          })()}
                           {canChangeStatus && (
                             <button
                               style={{ ...S.actionBtn, color: "#d97706" }}

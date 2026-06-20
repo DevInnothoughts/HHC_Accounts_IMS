@@ -25,6 +25,7 @@ export default function FileUpload({
   entityId,
   existingDocs = [],
   onUploadSuccess,
+  requiredTypes = null,
   canUpload = true,
 }) {
   const [selectedDocType, setSelectedDocType] = useState("");
@@ -37,6 +38,9 @@ export default function FileUpload({
   const inputRefs = useRef({});
 
   const docTypes = DOC_TYPES[entityType] || DOC_TYPES.payment;
+  // If the caller passes requiredTypes, it overrides the static `required` flags.
+  const isRequired = (dt) =>
+    requiredTypes ? requiredTypes.includes(dt.value) : dt.required;
 
   const uploadEndpoint =
     entityType === "payment"
@@ -195,7 +199,7 @@ export default function FileUpload({
               <div style={S.docCardTop}>
                 <div style={S.docCardLabel}>
                   {dt.label}
-                  {dt.required && !uploaded && (
+                  {isRequired(dt) && !uploaded && (
                     <span style={S.requiredBadge}>Required</span>
                   )}
                   {uploaded && <span style={S.uploadedBadge}>✓ Uploaded</span>}
@@ -317,7 +321,7 @@ export default function FileUpload({
         <div style={S.sectionLabel}>Required Documents Checklist</div>
         <div style={S.checklist}>
           {docTypes
-            .filter((d) => d.required)
+            .filter((d) => isRequired(d))
             .map((dt) => {
               const uploaded = isUploaded(dt.value);
               return (

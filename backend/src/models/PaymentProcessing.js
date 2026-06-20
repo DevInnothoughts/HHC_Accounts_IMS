@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const Counter = require("./Counter");
 
 const approvalSchema = new mongoose.Schema({
   stage: { type: String },
@@ -117,8 +118,8 @@ const paymentProcessingSchema = new mongoose.Schema(
 
 paymentProcessingSchema.pre("save", async function (next) {
   if (!this.paymentId) {
-    const count = await mongoose.model("PaymentProcessing").countDocuments();
-    this.paymentId = `PAY-${String(count + 1).padStart(6, "0")}`;
+    const seq = await Counter.next("paymentProcessing");
+    this.paymentId = `PAY-${String(seq).padStart(6, "0")}`;
   }
   // Auto-update remaining amount
   this.remainingAmount = this.totalAmount - (this.paidAmount || 0);
