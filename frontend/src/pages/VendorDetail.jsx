@@ -259,6 +259,7 @@ export default function VendorDetail() {
             <Row label="Category" value={vendor.vendorCategory} />
             <Row label="PAN Number" value={vendor.panNumber} mono />
             <Row label="GST Number" value={vendor.gstNumber || "—"} mono />
+            <Row label="MSME Number" value={vendor.msmeNumber || "—"} />
             <Row label="Address" value={vendor.businessAddress || "—"} />
           </InfoCard>
 
