@@ -58,6 +58,7 @@ const invoiceRequestSchema = new mongoose.Schema(
     amount: { type: Number, required: true, min: 0 },
     gstAmount: { type: Number, default: 0, min: 0 },
     tdsAmount: { type: Number, default: 0, min: 0 },
+    roundOff: { type: Number, default: 0 }, // ± adjustment applied to base + GST
     netPayable: { type: Number, required: true, min: 0 },
     invoiceNumber: { type: String, required: true, trim: true },
     invoiceDate: { type: Date, required: true },

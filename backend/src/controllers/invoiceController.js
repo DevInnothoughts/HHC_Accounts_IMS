@@ -70,7 +70,13 @@ exports.createInvoice = async (req, res) => {
       payload.amount = totals.amount;
       payload.gstAmount = totals.gstAmount;
       // TDS is applied later at accounts approval, so netPayable here = base + GST
-      payload.netPayable = +(totals.amount + totals.gstAmount).toFixed(2);
+      const roundOff = parseFloat(payload.roundOff) || 0;
+      payload.roundOff = roundOff;
+      payload.netPayable = +(
+        totals.amount +
+        totals.gstAmount +
+        roundOff
+      ).toFixed(2);
     }
     const netPayable = payload.netPayable;
 
@@ -259,11 +265,12 @@ exports.approveInvoice = async (req, res) => {
       // Recalculate TDS amount and net payable based on base amount
       invoice.tdsPercentage = tds;
       invoice.tdsAmount = parseFloat(((invoice.amount * tds) / 100).toFixed(2));
-      invoice.netPayable = parseFloat(
-        (invoice.amount + (invoice.gstAmount || 0) - invoice.tdsAmount).toFixed(
-          2,
-        ),
-      );
+      invoice.netPayable = +(
+        invoice.amount +
+        invoice.gstAmount +
+        (invoice.roundOff || 0) -
+        invoice.tdsAmount
+      ).toFixed(2);
     }
 
     invoice.status = step.nextStatus;
@@ -484,14 +491,21 @@ exports.updateInvoice = async (req, res) => {
     delete updateData.tdsPercentage; // ✅ TDS only set during approval, not edit
     delete updateData.tdsAmount; // ✅ recalculated during accounts approval
 
-    // ✅ Recompute base/GST/net from edited line items
     if (Array.isArray(updateData.items) && updateData.items.length > 0) {
       const totals = computeInvoiceTotals(updateData.items);
       updateData.items = totals.items;
       updateData.amount = totals.amount;
       updateData.gstAmount = totals.gstAmount;
-      updateData.netPayable = +(totals.amount + totals.gstAmount).toFixed(2);
     }
+
+    const baseAmt = updateData.amount ?? invoice.amount;
+    const gstAmt = updateData.gstAmount ?? invoice.gstAmount;
+    const roundOff =
+      updateData.roundOff !== undefined
+        ? Number(updateData.roundOff) || 0
+        : invoice.roundOff || 0;
+    updateData.roundOff = roundOff;
+    updateData.netPayable = +(baseAmt + gstAmt + roundOff).toFixed(2);
 
     const updated = await InvoiceRequest.findByIdAndUpdate(
       req.params.id,

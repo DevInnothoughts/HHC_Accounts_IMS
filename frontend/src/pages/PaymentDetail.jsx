@@ -359,6 +359,10 @@ export default function PaymentDetail() {
               value={`₹${invoice?.gstAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
             />
             <InfoRow
+              label="Round Off"
+              value={`${(invoice?.roundOff || 0) < 0 ? "− " : "+ "}₹${Math.abs(invoice?.roundOff || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+            />
+            <InfoRow
               label="TDS"
               value={`₹${invoice?.tdsAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
             />

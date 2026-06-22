@@ -676,6 +676,15 @@ export default function InvoiceDetail() {
                     </span>
                   </div>
                   <div style={S.amountRow}>
+                    <span style={S.amountLabel}>Round Off</span>
+                    <span style={S.amountVal}>
+                      {(invoice.roundOff || 0) < 0 ? "− " : "+ "}₹
+                      {Math.abs(invoice.roundOff || 0).toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <div style={S.amountRow}>
                     <span style={S.amountLabel}>TDS Deduction</span>
                     <span style={{ ...S.amountVal, color: "#dc2626" }}>
                       − ₹

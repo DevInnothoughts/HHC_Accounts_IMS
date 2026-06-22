@@ -521,6 +521,10 @@ exports.generateExcel = async (req, res) => {
       `₹${invoice?.gstAmount?.toLocaleString("en-IN")}`,
     );
     addSummaryRow(
+      "Round Off:",
+      `${(invoice?.roundOff || 0) < 0 ? "− " : "+ "}₹${Math.abs(invoice?.roundOff || 0).toLocaleString("en-IN")}`,
+    );
+    addSummaryRow(
       "TDS Deduction:",
       `₹${invoice?.tdsAmount?.toLocaleString("en-IN")}`,
     );
@@ -691,6 +695,7 @@ exports.bulkGenerateExcel = async (req, res) => {
       { header: "IFSC Code", key: "ifscCode", width: 14 },
       { header: "Base Amount (₹)", key: "amount", width: 16 },
       { header: "GST (₹)", key: "gst", width: 12 },
+      { header: "Round Off (₹)", key: "roundOff", width: 14 }, // ✅ added
       { header: "TDS (₹)", key: "tds", width: 12 },
       { header: "Net Payable (₹)", key: "netPayable", width: 16 },
       { header: "Payment Amount (₹)", key: "paymentAmount", width: 18 },
@@ -734,6 +739,7 @@ exports.bulkGenerateExcel = async (req, res) => {
         ifscCode: vendor?.ifscCode || "—",
         amount: inv?.amount || 0,
         gst: inv?.gstAmount || 0,
+        roundOff: inv?.roundOff || 0,
         tds: inv?.tdsAmount || 0,
         netPayable: inv?.netPayable || 0,
         paymentAmount: pay.paymentAmount || 0,

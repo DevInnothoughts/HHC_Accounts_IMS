@@ -123,7 +123,12 @@ export default function CreatePaymentRequest() {
     setForm((f) => ({
       ...f,
       gstAmount: gstAmount.toString(),
-      netPayable: (amount + gstAmount - tds).toFixed(2),
+      netPayable: (
+        amount +
+        gstAmount +
+        (parseFloat(form.roundOff) || 0) -
+        tds
+      ).toFixed(2),
     }));
   }, [form.amount, form.gstPercentage, form.items]);
 
@@ -135,6 +140,21 @@ export default function CreatePaymentRequest() {
   const setField = (field, val) => {
     setForm((f) => ({ ...f, [field]: val }));
     if (errors[field]) setErrors((e) => ({ ...e, [field]: "" }));
+  };
+
+  const handleRoundOff = (e) => {
+    const val = e.target.value;
+    setForm((f) => {
+      const base = parseFloat(f.amount) || 0;
+      const gst = parseFloat(f.gstAmount) || 0;
+      const tds = parseFloat(f.tdsAmount) || 0;
+      const ro = parseFloat(val) || 0;
+      return {
+        ...f,
+        roundOff: val,
+        netPayable: (base + gst + ro - tds).toFixed(2),
+      };
+    });
   };
 
   // ✅ Items drive base amount + total GST; net payable = base + GST − TDS
@@ -149,9 +169,11 @@ export default function CreatePaymentRequest() {
         totals.amount > 0
           ? parseFloat(((totals.gstAmount / totals.amount) * 100).toFixed(2))
           : 0,
-      netPayable: (totals.grandTotal - (parseFloat(f.tdsAmount) || 0)).toFixed(
-        2,
-      ),
+      netPayable: (
+        totals.grandTotal +
+        (parseFloat(f.roundOff) || 0) -
+        (parseFloat(f.tdsAmount) || 0)
+      ).toFixed(2),
     }));
     if (errors.items) setErrors((er) => ({ ...er, items: "" }));
   };
@@ -513,6 +535,35 @@ export default function CreatePaymentRequest() {
                 </div>
               )}
 
+              <div
+                style={{
+                  marginTop: 18,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "flex-end",
+                  gap: 10,
+                }}
+              >
+                <label
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "#475569",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  Round Off (±)
+                </label>
+                <input
+                  style={{ ...S.input, width: 160 }}
+                  type="number"
+                  step="0.01"
+                  value={form.roundOff}
+                  onChange={handleRoundOff}
+                  placeholder="e.g. -0.40 or 0.60"
+                />
+              </div>
+
               <div style={{ marginTop: 18 }}>
                 <div style={S.netPayableBox}>
                   <div>
@@ -521,8 +572,14 @@ export default function CreatePaymentRequest() {
                       Base (₹
                       {parseFloat(form.amount || 0).toLocaleString("en-IN")}) +
                       GST (₹
-                      {parseFloat(form.gstAmount || 0).toLocaleString("en-IN")})
-                      − TDS (set by accounts)
+                      {parseFloat(form.gstAmount || 0).toLocaleString(
+                        "en-IN",
+                      )}) {(parseFloat(form.roundOff) || 0) < 0 ? "−" : "+"}{" "}
+                      Round Off (₹
+                      {Math.abs(parseFloat(form.roundOff) || 0).toLocaleString(
+                        "en-IN",
+                      )}
+                      ) − TDS (set by accounts)
                     </div>
                   </div>
                   <div style={S.netValue}>
@@ -657,6 +714,10 @@ export default function CreatePaymentRequest() {
                         : ""
                     }`}
                     value={`₹${parseFloat(form.gstAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                  />
+                  <ReviewRow
+                    label="Round Off"
+                    value={`${(parseFloat(form.roundOff) || 0) < 0 ? "− " : "+ "}₹${Math.abs(parseFloat(form.roundOff) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
                   />
                   <ReviewRow label="TDS" value="Set by accounts" />
                   <div
