@@ -16,7 +16,11 @@ router.use(authenticate);
 router.get("/", ctrl.getInvoices);
 router.get("/:id", ctrl.getInvoiceById);
 router.post("/", roleGuard(ROLES.BRANCH_USER), ctrl.createInvoice);
-router.put("/:id", roleGuard(ROLES.BRANCH_USER), ctrl.updateInvoice);
+router.put(
+  "/:id",
+  roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.updateInvoice,
+);
 router.patch("/:id/submit", roleGuard(ROLES.BRANCH_USER), ctrl.submitInvoice);
 router.patch(
   "/:id/approve",
