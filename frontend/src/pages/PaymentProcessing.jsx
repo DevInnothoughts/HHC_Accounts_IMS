@@ -5,6 +5,7 @@ import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { PAYMENT_WORKFLOW } from "../config/constants";
+import SearchableSelect from "../components/SearchableSelect.jsx";
 
 const STATUS_STYLES = {
   "Payment Pending": { bg: "#f1f5f9", color: "#475569", icon: "⏳" },
@@ -42,14 +43,28 @@ export default function PaymentProcessing() {
   const [utrInput, setUtrInput] = useState("");
   const [utrSubmitting, setUtrSubmitting] = useState(false);
   const [processedPayments, setProcessedPayments] = useState([]);
+  const [branches, setBranches] = useState([]);
+  const [branchFilter, setBranchFilter] = useState("");
+
+  useEffect(() => {
+    if (["accounts", "super_admin", "cluster_head"].includes(authUser?.role)) {
+      api
+        .get("/branches?limit=100")
+        .then((r) =>
+          setBranches(Array.isArray(r.data) ? r.data : r.data.branches || []),
+        )
+        .catch(console.error);
+    }
+  }, [authUser]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
+      const bq = branchFilter ? `branch=${branchFilter}` : "";
       const [invRes, payRes, processedRes] = await Promise.all([
-        api.get("/payments/approved-invoices"),
-        api.get("/payments"),
-        api.get("/payments?processedOnly=true&limit=100"),
+        api.get(`/payments/approved-invoices${bq ? `?${bq}` : ""}`),
+        api.get(`/payments${bq ? `?${bq}` : ""}`),
+        api.get(`/payments?processedOnly=true&limit=100${bq ? `&${bq}` : ""}`),
       ]);
       setInvoices(
         Array.isArray(invRes.data) ? invRes.data : invRes.data.invoices || [],
@@ -75,7 +90,7 @@ export default function PaymentProcessing() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [branchFilter]);
 
   useEffect(() => {
     fetchData();
@@ -258,6 +273,25 @@ export default function PaymentProcessing() {
             )}
           </button>
         </div>
+
+        {["accounts", "super_admin", "cluster_head"].includes(
+          authUser?.role,
+        ) && (
+          <div style={{ marginBottom: 16, maxWidth: 280 }}>
+            <SearchableSelect
+              options={[
+                { _id: "", name: "All Branches", code: "" },
+                ...branches,
+              ]}
+              value={branchFilter}
+              onChange={(val) => setBranchFilter(val)}
+              getOptionLabel={(b) =>
+                b.code ? `${b.name} (${b.code})` : b.name
+              }
+              placeholder="All Branches"
+            />
+          </div>
+        )}
 
         {loading ? (
           <div style={S.loading}>Loading...</div>
@@ -531,8 +565,10 @@ export default function PaymentProcessing() {
                         {[
                           "Payment ID",
                           "Invoice",
+                          "Branch",
                           "Vendor",
                           "Amount",
+
                           "Status",
                           "Actions",
                         ].map((h) => (
@@ -598,6 +634,7 @@ export default function PaymentProcessing() {
                                 {pay.invoiceRequest?.invoiceNumber}
                               </div>
                             </td>
+                            <td style={S.td}>{pay.branch?.name || "—"}</td>
                             <td style={S.td}>{pay.vendor?.vendorName}</td>
                             <td
                               style={{
@@ -705,8 +742,10 @@ export default function PaymentProcessing() {
                   {[
                     "Payment ID",
                     "Invoice",
+                    "Branch",
                     "Vendor",
                     "Amount",
+
                     "UTR Number",
                     "Processed At",
                     "Actions",
@@ -728,6 +767,7 @@ export default function PaymentProcessing() {
                         {pay.invoiceRequest?.requestId || "—"}
                       </div>
                     </td>
+                    <td style={S.td}>{pay.branch?.name || "—"}</td>
                     <td style={S.td}>{pay.vendor?.vendorName || "—"}</td>
                     <td style={{ ...S.td, fontWeight: 600 }}>
                       ₹{pay.paymentAmount?.toLocaleString("en-IN")}
