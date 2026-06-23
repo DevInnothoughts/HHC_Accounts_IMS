@@ -901,35 +901,40 @@ export default function InvoiceDetail() {
                       %
                     </span>
                   </div>
-                  {tdsInput !== "" && (
-                    <div
-                      style={{
-                        marginTop: 8,
-                        padding: "8px 12px",
-                        background: "#f0fdf4",
-                        border: "1px solid #bbf7d0",
-                        borderRadius: 8,
-                        fontSize: 12,
-                        color: "#16a34a",
-                      }}
-                    >
-                      TDS Amount: ₹
-                      {(
-                        (invoice.amount * parseFloat(tdsInput || 0)) /
-                        100
-                      ).toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                      })}{" "}
-                      · Net Payable: ₹
-                      {(
+                  {tdsInput !== "" &&
+                    (() => {
+                      // Match the backend exactly: TDS rounded to nearest rupee
+                      const tdsAmount = Math.round(
+                        (invoice.amount * (parseFloat(tdsInput) || 0)) / 100,
+                      );
+                      const netPayable =
                         invoice.amount +
-                        (invoice.gstAmount || 0) -
-                        (invoice.amount * parseFloat(tdsInput || 0)) / 100
-                      ).toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </div>
-                  )}
+                        (invoice.gstAmount || 0) +
+                        (invoice.roundOff || 0) -
+                        tdsAmount;
+                      return (
+                        <div
+                          style={{
+                            marginTop: 8,
+                            padding: "8px 12px",
+                            background: "#f0fdf4",
+                            border: "1px solid #bbf7d0",
+                            borderRadius: 8,
+                            fontSize: 12,
+                            color: "#16a34a",
+                          }}
+                        >
+                          TDS Amount: ₹
+                          {tdsAmount.toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}{" "}
+                          · Net Payable: ₹
+                          {netPayable.toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}
+                        </div>
+                      );
+                    })()}
                 </div>
               )}
 

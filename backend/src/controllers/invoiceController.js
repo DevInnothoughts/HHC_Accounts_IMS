@@ -263,14 +263,17 @@ exports.approveInvoice = async (req, res) => {
         });
       }
       // Recalculate TDS amount and net payable based on base amount
+      // AFTER
       invoice.tdsPercentage = tds;
-      invoice.tdsAmount = parseFloat(((invoice.amount * tds) / 100).toFixed(2));
-      invoice.netPayable = +(
-        invoice.amount +
-        invoice.gstAmount +
-        (invoice.roundOff || 0) -
-        invoice.tdsAmount
-      ).toFixed(2);
+      invoice.tdsAmount = Math.round((invoice.amount * tds) / 100); // ✅ nearest integer
+      invoice.netPayable = parseFloat(
+        (
+          invoice.amount +
+          (invoice.gstAmount || 0) +
+          (invoice.roundOff || 0) - // ✅ include round-off (from earlier change)
+          invoice.tdsAmount
+        ).toFixed(2),
+      );
     }
 
     invoice.status = step.nextStatus;
