@@ -45,6 +45,13 @@ export default function PaymentProcessing() {
   const [processedPayments, setProcessedPayments] = useState([]);
   const [branches, setBranches] = useState([]);
   const [branchFilter, setBranchFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
 
   useEffect(() => {
     if (["accounts", "super_admin", "cluster_head"].includes(authUser?.role)) {
@@ -60,11 +67,19 @@ export default function PaymentProcessing() {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const bq = branchFilter ? `branch=${branchFilter}` : "";
+      const base = new URLSearchParams();
+      if (branchFilter) base.set("branch", branchFilter);
+      if (debouncedSearch) base.set("search", debouncedSearch);
+      const suffix = base.toString() ? `?${base}` : "";
+
+      const processedParams = new URLSearchParams(base);
+      processedParams.set("processedOnly", "true");
+      processedParams.set("limit", "100");
+
       const [invRes, payRes, processedRes] = await Promise.all([
-        api.get(`/payments/approved-invoices${bq ? `?${bq}` : ""}`),
-        api.get(`/payments${bq ? `?${bq}` : ""}`),
-        api.get(`/payments?processedOnly=true&limit=100${bq ? `&${bq}` : ""}`),
+        api.get(`/payments/approved-invoices${suffix}`),
+        api.get(`/payments${suffix}`),
+        api.get(`/payments?${processedParams}`),
       ]);
       setInvoices(
         Array.isArray(invRes.data) ? invRes.data : invRes.data.invoices || [],
@@ -90,7 +105,7 @@ export default function PaymentProcessing() {
     } finally {
       setLoading(false);
     }
-  }, [branchFilter]);
+  }, [branchFilter, debouncedSearch]);
 
   useEffect(() => {
     fetchData();
@@ -273,25 +288,52 @@ export default function PaymentProcessing() {
             )}
           </button>
         </div>
+        {/* Search + branch filter — same row */}
+        <div
+          style={{
+            display: "flex",
+            gap: 10,
+            marginBottom: 16,
+            flexWrap: "wrap",
+            alignItems: "center",
+            maxWidth: 640,
+          }}
+        >
+          <input
+            style={{
+              flex: 1,
+              minWidth: 240,
+              padding: "9px 14px",
+              border: "1.5px solid #e2e8f0",
+              borderRadius: 8,
+              fontSize: 14,
+              outline: "none",
+              boxSizing: "border-box",
+            }}
+            placeholder="Search invoice ID, vendor, payment ID, UTR..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
 
-        {["accounts", "super_admin", "cluster_head"].includes(
-          authUser?.role,
-        ) && (
-          <div style={{ marginBottom: 16, maxWidth: 280 }}>
-            <SearchableSelect
-              options={[
-                { _id: "", name: "All Branches", code: "" },
-                ...branches,
-              ]}
-              value={branchFilter}
-              onChange={(val) => setBranchFilter(val)}
-              getOptionLabel={(b) =>
-                b.code ? `${b.name} (${b.code})` : b.name
-              }
-              placeholder="All Branches"
-            />
-          </div>
-        )}
+          {["accounts", "super_admin", "cluster_head"].includes(
+            authUser?.role,
+          ) && (
+            <div style={{ width: 260, flexShrink: 0 }}>
+              <SearchableSelect
+                options={[
+                  { _id: "", name: "All Branches", code: "" },
+                  ...branches,
+                ]}
+                value={branchFilter}
+                onChange={(val) => setBranchFilter(val)}
+                getOptionLabel={(b) =>
+                  b.code ? `${b.name} (${b.code})` : b.name
+                }
+                placeholder="All Branches"
+              />
+            </div>
+          )}
+        </div>
 
         {loading ? (
           <div style={S.loading}>Loading...</div>

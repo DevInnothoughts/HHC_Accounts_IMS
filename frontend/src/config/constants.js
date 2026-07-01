@@ -70,3 +70,22 @@ export const PAYMENT_STAGES = [
 export const PAYMENT_WORKFLOW = [
   { status: "Payment Raised", actingRole: "accounts" },
 ];
+
+export const VENDOR_TYPES = {
+  standard: {
+    label: "Standard (bank transfer)",
+    requireBank: true,
+    requirePAN: true,
+    requiredDocs: ["pan", "cheque"],
+  },
+  statutory: {
+    label: "Utility / Tax / Statutory",
+    requireBank: false,
+    requirePAN: false,
+    requiredDocs: [],
+  },
+};
+
+export const VENDOR_TYPE_OPTIONS = Object.entries(VENDOR_TYPES).map(
+  ([value, cfg]) => ({ value, label: cfg.label }),
+);

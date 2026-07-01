@@ -47,6 +47,16 @@ export default function InvoiceRequests() {
   });
   const [branches, setBranches] = useState([]);
   const [actionLoading, setActionLoading] = useState("");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setDebouncedSearch(search.trim());
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(t);
+  }, [search]);
 
   const handleQuickApprove = async (e, invoiceId) => {
     e.stopPropagation(); // prevent row click navigation
@@ -93,6 +103,7 @@ export default function InvoiceRequests() {
       const params = new URLSearchParams({
         page,
         limit: 20,
+        ...(debouncedSearch && { search: debouncedSearch }),
         ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)),
       });
       const { data } = await api.get(`/invoices?${params}`);
@@ -103,7 +114,7 @@ export default function InvoiceRequests() {
     } finally {
       setLoading(false);
     }
-  }, [page, filters]);
+  }, [page, debouncedSearch, filters]);
 
   useEffect(() => {
     fetchInvoices();
@@ -130,6 +141,12 @@ export default function InvoiceRequests() {
 
         {/* Filters */}
         <div style={S.filterBar}>
+          <input
+            style={S.searchInput}
+            placeholder="Search invoice ID, invoice no., vendor..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
           <select
             style={S.select}
             value={filters.status}
@@ -180,6 +197,8 @@ export default function InvoiceRequests() {
           <button
             style={S.resetBtn}
             onClick={() => {
+              setSearch("");
+              setDebouncedSearch("");
               setFilters({ status: "", priority: "", branch: "" });
               setPage(1);
             }}
@@ -412,6 +431,15 @@ const S = {
     cursor: "pointer",
   },
   filterBar: { display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap" },
+  searchInput: {
+    flex: 1,
+    minWidth: 220,
+    padding: "9px 14px",
+    border: `1.5px solid ${C.border}`,
+    borderRadius: 8,
+    fontSize: 14,
+    outline: "none",
+  },
   select: {
     padding: "9px 12px",
     border: `1.5px solid ${C.border}`,

@@ -8,6 +8,13 @@ const documentSchema = new mongoose.Schema({
   uploadedAt: { type: Date, default: Date.now },
 });
 
+// Bank details + PAN are mandatory for standard vendors, optional for
+// utility/tax/statutory payees (electricity boards, govt challans, etc.).
+// Works on create and edit because both paths use .create()/.save().
+const requiredForStandard = function () {
+  return this.vendorType !== "statutory";
+};
+
 const vendorSchema = new mongoose.Schema(
   {
     branch: {
@@ -21,7 +28,12 @@ const vendorSchema = new mongoose.Schema(
     email: { type: String, lowercase: true, trim: true },
     companyName: { type: String, trim: true },
     gstNumber: { type: String, trim: true },
-    panNumber: { type: String, required: true, trim: true, uppercase: true },
+    panNumber: {
+      type: String,
+      required: requiredForStandard,
+      trim: true,
+      uppercase: true,
+    },
     businessAddress: { type: String, trim: true },
     vendorCategory: {
       type: String,
@@ -35,11 +47,25 @@ const vendorSchema = new mongoose.Schema(
       ],
       required: false,
     },
+    vendorType: {
+      type: String,
+      enum: ["standard", "statutory"],
+      default: "standard",
+    },
     msmeNumber: { type: String, trim: true, default: null },
-    accountHolderName: { type: String, required: true, trim: true },
-    bankName: { type: String, required: true, trim: true },
-    accountNumber: { type: String, required: true, trim: true },
-    ifscCode: { type: String, required: true, trim: true, uppercase: true },
+    accountHolderName: {
+      type: String,
+      required: requiredForStandard,
+      trim: true,
+    },
+    bankName: { type: String, required: requiredForStandard, trim: true },
+    accountNumber: { type: String, required: requiredForStandard, trim: true },
+    ifscCode: {
+      type: String,
+      required: requiredForStandard,
+      trim: true,
+      uppercase: true,
+    },
     upiId: { type: String, trim: true },
     documents: [documentSchema],
     approvalStatus: {

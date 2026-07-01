@@ -538,6 +538,7 @@ exports.getInvoices = async (req, res) => {
       priority,
       from,
       to,
+      search,
       page = 1,
       limit = 20,
     } = req.query;
@@ -570,6 +571,18 @@ exports.getInvoices = async (req, res) => {
         ...(from && { $gte: new Date(from) }),
         ...(to && { $lte: new Date(to) }),
       };
+    }
+
+    if (search) {
+      const rx = { $regex: search.trim(), $options: "i" };
+      const vendorIds = await Vendor.find({
+        $or: [{ vendorName: rx }, { companyName: rx }],
+      }).distinct("_id");
+      query.$or = [
+        { requestId: rx },
+        { invoiceNumber: rx },
+        ...(vendorIds.length ? [{ vendor: { $in: vendorIds } }] : []),
+      ];
     }
 
     const total = await InvoiceRequest.countDocuments(query);

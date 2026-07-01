@@ -2,7 +2,7 @@ const Vendor = require("../models/Vendor");
 const { logAction } = require("../services/auditService");
 const { sendNotificationEmail } = require("../services/emailService");
 const User = require("../models/User");
-const { ROLES } = require("../config/constants");
+const { ROLES, VENDOR_TYPES } = require("../config/constants");
 
 exports.getVendors = async (req, res) => {
   try {
@@ -97,14 +97,18 @@ exports.getVendorById = async (req, res) => {
 
 exports.createVendor = async (req, res) => {
   try {
-    const existing = await Vendor.findOne({
-      branch: req.body.branch,
-      panNumber: req.body.panNumber,
-    });
-    if (existing) {
-      return res.status(400).json({
-        message: "A vendor with this PAN already exists in this branch",
+    // Only enforce PAN-uniqueness when a PAN is actually provided
+    // (statutory/utility vendors may not have one).
+    if (req.body.panNumber?.trim()) {
+      const existing = await Vendor.findOne({
+        branch: req.body.branch,
+        panNumber: req.body.panNumber,
       });
+      if (existing) {
+        return res.status(400).json({
+          message: "A vendor with this PAN already exists in this branch",
+        });
+      }
     }
 
     // ✅ REQ 1: Always starts as pending_approval
@@ -145,7 +149,8 @@ exports.submitVendor = async (req, res) => {
     }
 
     // ✅ PAN + cheque always required; GST cert required only if a GST number exists
-    const REQUIRED_DOCS = ["pan", "cheque"];
+    const profile = VENDOR_TYPES[vendor.vendorType] || VENDOR_TYPES.standard;
+    const REQUIRED_DOCS = [...profile.requiredDocs];
     if (vendor.gstNumber?.trim()) REQUIRED_DOCS.push("gst");
 
     const uploadedTypes = (vendor.documents || []).map((d) => d.type);

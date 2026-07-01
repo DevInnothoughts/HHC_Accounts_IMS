@@ -1,6 +1,7 @@
 const PaymentProcessing = require("../models/PaymentProcessing");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const User = require("../models/User");
+const Vendor = require("../models/Vendor");
 const ExcelJS = require("exceljs");
 const {
   PAYMENT_STATUS,
@@ -16,7 +17,7 @@ const getPaymentWorkflowStep = (status) =>
 // ── List approved invoices available for payment ───────────
 exports.getApprovedInvoicesForPayment = async (req, res) => {
   try {
-    const { branch, page = 1, limit = 20 } = req.query;
+    const { branch, search, page = 1, limit = 20 } = req.query;
     const query = {
       status: "Cluster Head Approved",
       paymentRequest: { $ne: null }, // has a payment record
@@ -38,6 +39,18 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       }
     } else if (branch) {
       query.branch = branch;
+    }
+
+    if (search) {
+      const rx = { $regex: search.trim(), $options: "i" };
+      const vendorIds = await Vendor.find({
+        $or: [{ vendorName: rx }, { companyName: rx }],
+      }).distinct("_id");
+      query.$or = [
+        { requestId: rx },
+        { invoiceNumber: rx },
+        ...(vendorIds.length ? [{ vendor: { $in: vendorIds } }] : []),
+      ];
     }
 
     const total = await InvoiceRequest.countDocuments(query);
@@ -67,7 +80,7 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
 // ── List payment processing records ───────────────────────
 exports.getPayments = async (req, res) => {
   try {
-    const { status, branch, page = 1, limit = 20 } = req.query;
+    const { status, search, branch, page = 1, limit = 20 } = req.query;
     const query = {};
 
     // AFTER
@@ -94,6 +107,24 @@ exports.getPayments = async (req, res) => {
       query.status = status;
     } else {
       query.status = { $ne: "Payment Pending" };
+    }
+
+    if (search) {
+      const rx = { $regex: search.trim(), $options: "i" };
+      const [vendorIds, invoiceIds] = await Promise.all([
+        Vendor.find({
+          $or: [{ vendorName: rx }, { companyName: rx }],
+        }).distinct("_id"),
+        InvoiceRequest.find({
+          $or: [{ requestId: rx }, { invoiceNumber: rx }],
+        }).distinct("_id"),
+      ]);
+      query.$or = [
+        { paymentId: rx },
+        { utrNumber: rx },
+        ...(vendorIds.length ? [{ vendor: { $in: vendorIds } }] : []),
+        ...(invoiceIds.length ? [{ invoiceRequest: { $in: invoiceIds } }] : []),
+      ];
     }
 
     const total = await PaymentProcessing.countDocuments(query);

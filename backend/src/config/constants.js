@@ -95,4 +95,18 @@ module.exports = {
 
   OTP_EXPIRY_MINUTES: 5,
   OTP_MAX_ATTEMPTS: 5,
+  VENDOR_TYPES: {
+    standard: {
+      label: "Standard (bank transfer)",
+      requireBank: true,
+      requirePAN: true,
+      requiredDocs: ["pan", "cheque"],
+    },
+    statutory: {
+      label: "Utility / Tax / Statutory",
+      requireBank: false,
+      requirePAN: false,
+      requiredDocs: [],
+    },
+  },
 };

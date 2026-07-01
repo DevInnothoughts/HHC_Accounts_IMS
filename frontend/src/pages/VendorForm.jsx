@@ -6,6 +6,7 @@ import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import SearchableSelect from "../components/SearchableSelect.jsx";
+import { VENDOR_TYPES, VENDOR_TYPE_OPTIONS } from "../config/constants.js";
 
 const VENDOR_CATEGORIES = [
   "Service Vendors",
@@ -34,6 +35,7 @@ const INIT = {
   panNumber: "",
   businessAddress: "",
   vendorCategory: "",
+  vendorType: "standard",
   msmeNumber: "",
   accountHolderName: "",
   bankName: "",
@@ -59,6 +61,7 @@ export default function VendorForm() {
   const [success, setSuccess] = useState("");
   const [chequeScanning, setChequeScanning] = useState(false);
   const [chequeError, setChequeError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const chequeInputRef = useRef(null);
 
   const editLocked =
@@ -91,6 +94,7 @@ export default function VendorForm() {
             panNumber: v.panNumber || "",
             businessAddress: v.businessAddress || "",
             vendorCategory: v.vendorCategory || "",
+            vendorType: v.vendorType || "standard",
             accountHolderName: v.accountHolderName || "",
             bankName: v.bankName || "",
             accountNumber: v.accountNumber || "",
@@ -124,27 +128,49 @@ export default function VendorForm() {
     setForm((f) => ({ ...f, [field]: val }));
     if (errors[field]) setErrors((er) => ({ ...er, [field]: "" }));
   };
-  const validate = () => {
+  const computeErrors = () => {
     const e = {};
+    const profile = VENDOR_TYPES[form.vendorType] || VENDOR_TYPES.standard;
+
     if (!form.branch) e.branch = "Branch is required";
     if (!form.vendorName?.trim()) e.vendorName = "Vendor name is required";
     if (!form.mobile?.trim()) e.mobile = "Mobile is required";
-    if (!form.panNumber?.trim()) e.panNumber = "PAN number is required";
-    else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(form.panNumber))
+
+    // PAN — required only for standard; format-checked whenever a value is present
+    if (profile.requirePAN && !form.panNumber?.trim())
+      e.panNumber = "PAN number is required";
+    else if (
+      form.panNumber?.trim() &&
+      !/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(form.panNumber)
+    )
       e.panNumber = "Invalid PAN (e.g. ABCDE1234F)";
+
     if (
       form.gstNumber &&
       !/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d][Z][A-Z\d]$/.test(form.gstNumber)
     )
       e.gstNumber = "Invalid GST format";
-    if (!form.accountHolderName?.trim())
+
+    // Bank details — required only for standard
+    if (profile.requireBank && !form.accountHolderName?.trim())
       e.accountHolderName = "Account holder name is required";
-    if (!form.bankName?.trim()) e.bankName = "Bank name is required";
-    if (!form.accountNumber?.trim())
+    if (profile.requireBank && !form.bankName?.trim())
+      e.bankName = "Bank name is required";
+    if (profile.requireBank && !form.accountNumber?.trim())
       e.accountNumber = "Account number is required";
-    if (!form.ifscCode?.trim()) e.ifscCode = "IFSC code is required";
-    else if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(form.ifscCode))
+    if (profile.requireBank && !form.ifscCode?.trim())
+      e.ifscCode = "IFSC code is required";
+    else if (
+      form.ifscCode?.trim() &&
+      !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(form.ifscCode)
+    )
       e.ifscCode = "Invalid IFSC (e.g. SBIN0001234)";
+
+    return e;
+  };
+
+  const validate = () => {
+    const e = computeErrors();
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -154,6 +180,7 @@ export default function VendorForm() {
     branch: 0,
     vendorName: 0,
     mobile: 0,
+    vendorType: 1,
     panNumber: 1,
     gstNumber: 1,
     msmeNumber: 1,
@@ -171,33 +198,9 @@ export default function VendorForm() {
       });
       return;
     }
-    if (!validate()) {
-      // Jump to the first section that has an error so user can see it
-      const firstErrorField = Object.keys(FIELD_SECTION).find(
-        (f) => errors[f] || document.querySelector(`[data-field="${f}"]`),
-      );
-      // Re-run validate to get fresh errors object (state update is async)
-      const e = {};
-      if (!form.branch) e.branch = "Branch is required";
-      if (!form.vendorName?.trim()) e.vendorName = "Vendor name is required";
-      if (!form.mobile?.trim()) e.mobile = "Mobile is required";
-      if (!form.panNumber?.trim()) e.panNumber = "PAN number is required";
-      else if (!/^[A-Z]{5}[0-9]{4}[A-Z]$/.test(form.panNumber))
-        e.panNumber = "Invalid PAN (e.g. ABCDE1234F)";
-      if (
-        form.gstNumber &&
-        !/^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d][Z][A-Z\d]$/.test(form.gstNumber)
-      )
-        e.gstNumber = "Invalid GST format";
-      if (!form.accountHolderName?.trim())
-        e.accountHolderName = "Account holder name is required";
-      if (!form.bankName?.trim()) e.bankName = "Bank name is required";
-      if (!form.accountNumber?.trim())
-        e.accountNumber = "Account number is required";
-      if (!form.ifscCode?.trim()) e.ifscCode = "IFSC code is required";
-      else if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(form.ifscCode))
-        e.ifscCode = "Invalid IFSC (e.g. SBIN0001234)";
-
+    const e = computeErrors();
+    setErrors(e);
+    if (Object.keys(e).length > 0) {
       const firstBadField = Object.keys(FIELD_SECTION).find((f) => e[f]);
       if (firstBadField !== undefined) {
         setActiveSection(FIELD_SECTION[firstBadField]);
@@ -231,12 +234,14 @@ export default function VendorForm() {
   const handleFinish = async () => {
     const status = savedVendor?.approvalStatus;
     if (status === "draft" || status === "rejected") {
+      setSubmitting(true);
       try {
         const vid = savedVendorId || id;
         const { data } = await api.patch(`/vendors/${vid}/submit`);
         setSavedVendor(data);
       } catch (err) {
         setErrors({ submit: err.response?.data?.message || "Submit failed" });
+        setSubmitting(false);
         return; // stay on the page so the error shows
       }
     }
@@ -426,6 +431,29 @@ export default function VendorForm() {
               <div>
                 <h2 style={S.sectionTitle}>🏢 Business Details</h2>
                 <div style={S.grid2}>
+                  <Field label="Vendor Type *" error={errors.vendorType}>
+                    <select
+                      style={{
+                        ...S.input,
+                        ...(errors.vendorType ? S.inputError : {}),
+                      }}
+                      value={form.vendorType}
+                      onChange={(e) => setField("vendorType", e.target.value)}
+                    >
+                      {VENDOR_TYPE_OPTIONS.map((t) => (
+                        <option key={t.value} value={t.value}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span
+                      style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}
+                    >
+                      {form.vendorType === "statutory"
+                        ? "Bank details, PAN & PAN/cheque documents are optional for this type."
+                        : "Bank details and PAN are required."}
+                    </span>
+                  </Field>
                   <Field label="Vendor Category" error={errors.vendorCategory}>
                     <SearchableSelect
                       options={VENDOR_CATEGORIES}
@@ -673,11 +701,10 @@ export default function VendorForm() {
                     entityId={savedVendorId}
                     existingDocs={savedVendor?.documents || []}
                     onUploadSuccess={refreshVendor}
-                    requiredTypes={
-                      form.gstNumber?.trim()
-                        ? ["pan", "gst", "cheque"]
-                        : ["pan", "cheque"]
-                    }
+                    requiredTypes={[
+                      ...(VENDOR_TYPES[form.vendorType]?.requiredDocs || []),
+                      ...(form.gstNumber?.trim() ? ["gst"] : []),
+                    ]}
                   />
                 )}
               </div>
@@ -721,7 +748,10 @@ export default function VendorForm() {
               )}
               {activeSection === 3 &&
                 (() => {
-                  const REQUIRED_DOCS = ["pan", "cheque"];
+                  const REQUIRED_DOCS = [
+                    ...(VENDOR_TYPES[form.vendorType] || VENDOR_TYPES.standard)
+                      .requiredDocs,
+                  ];
                   if (form.gstNumber?.trim()) REQUIRED_DOCS.push("gst");
 
                   const uploadedTypes = (savedVendor?.documents || []).map(
@@ -763,17 +793,26 @@ export default function VendorForm() {
                       <button
                         style={{
                           ...S.submitBtn,
-                          opacity: allUploaded ? 1 : 0.45,
-                          cursor: allUploaded ? "pointer" : "not-allowed",
+                          opacity: allUploaded && !submitting ? 1 : 0.45,
+                          cursor:
+                            allUploaded && !submitting
+                              ? "pointer"
+                              : "not-allowed",
                         }}
-                        disabled={!allUploaded}
+                        disabled={!allUploaded || submitting}
                         onClick={handleFinish}
                       >
-                        ✓{" "}
-                        {savedVendor?.approvalStatus === "draft" ||
-                        savedVendor?.approvalStatus === "rejected"
-                          ? "Submit for Approval"
-                          : "Done"}
+                        {submitting ? (
+                          "⏳ Submitting..."
+                        ) : (
+                          <>
+                            ✓{" "}
+                            {savedVendor?.approvalStatus === "draft" ||
+                            savedVendor?.approvalStatus === "rejected"
+                              ? "Submit for Approval"
+                              : "Done"}
+                          </>
+                        )}
                       </button>
                     </div>
                   );
