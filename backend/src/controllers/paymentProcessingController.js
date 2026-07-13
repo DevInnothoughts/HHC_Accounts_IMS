@@ -903,9 +903,18 @@ exports.bulkGenerateExcel = async (req, res) => {
 // Body: { utrNumber }
 exports.recordUTR = async (req, res) => {
   try {
-    const { utrNumber, installmentIndex } = req.body;
+    const { utrNumber, installmentIndex, paymentDate } = req.body;
     if (!utrNumber?.trim())
       return res.status(400).json({ message: "UTR number is required" });
+
+    // Payment (value) date — validate if provided
+    let parsedPaymentDate = null;
+    if (paymentDate) {
+      parsedPaymentDate = new Date(paymentDate);
+      if (isNaN(parsedPaymentDate.getTime())) {
+        return res.status(400).json({ message: "Invalid payment date" });
+      }
+    }
 
     const payment = await PaymentProcessing.findById(req.params.id)
       .populate("invoiceRequest", "requestId netPayable")
@@ -932,6 +941,7 @@ exports.recordUTR = async (req, res) => {
       payment.installments[latestIdx].utrNumber = utr;
       payment.installments[latestIdx].utrRecordedAt = new Date();
       payment.installments[latestIdx].utrRecordedBy = req.user._id;
+      payment.installments[latestIdx].paymentDate = parsedPaymentDate;
       payment.installments[latestIdx].status = "Processed";
     }
 
@@ -951,6 +961,7 @@ exports.recordUTR = async (req, res) => {
     payment.utrNumber = utr;
     payment.utrRecordedAt = new Date();
     payment.utrRecordedBy = req.user._id;
+    payment.paymentDate = parsedPaymentDate;
 
     await payment.save();
 

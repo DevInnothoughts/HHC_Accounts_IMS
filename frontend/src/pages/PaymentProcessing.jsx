@@ -64,6 +64,9 @@ export default function PaymentProcessing() {
   );
   const [dateFrom, setDateFrom] = useState(savedState.dateFrom || "");
   const [dateTo, setDateTo] = useState(savedState.dateTo || "");
+  const [utrDate, setUtrDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
@@ -231,9 +234,11 @@ export default function PaymentProcessing() {
     try {
       await api.patch(`/payments/${utrModal._id}/utr`, {
         utrNumber: utrInput.trim(),
+        paymentDate: utrDate || undefined,
       });
       setUtrModal(null);
       setUtrInput("");
+      setUtrDate(new Date().toISOString().slice(0, 10));
       fetchData();
     } catch (err) {
       alert(err.response?.data?.message || "Failed to record UTR");
@@ -1426,6 +1431,33 @@ export default function PaymentProcessing() {
               onChange={(e) => setUtrInput(e.target.value.toUpperCase())}
               autoFocus
             />
+            <label
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: "#475569",
+                display: "block",
+                marginBottom: 6,
+              }}
+            >
+              Payment Date
+            </label>
+            <input
+              type="date"
+              max={new Date().toISOString().slice(0, 10)}
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                fontSize: 14,
+                outline: "none",
+                boxSizing: "border-box",
+                marginBottom: 16,
+              }}
+              value={utrDate}
+              onChange={(e) => setUtrDate(e.target.value)}
+            />
             <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>
               This will mark the payment as <strong>Payment Processed</strong>{" "}
               and notify the branch user.
@@ -1436,6 +1468,7 @@ export default function PaymentProcessing() {
                 onClick={() => {
                   setUtrModal(null);
                   setUtrInput("");
+                  setUtrDate(new Date().toISOString().slice(0, 10));
                 }}
                 disabled={utrSubmitting}
               >

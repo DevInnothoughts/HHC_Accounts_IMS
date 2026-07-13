@@ -22,6 +22,7 @@ const paymentInstallmentSchema = new mongoose.Schema({
   utrNumber: { type: String, trim: true },
   utrRecordedAt: { type: Date },
   utrRecordedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  paymentDate: { type: Date }, // actual date this installment was paid
   paymentId: { type: String }, // PAY-000001-1, PAY-000001-2 etc
   status: {
     type: String,
@@ -107,6 +108,7 @@ const paymentProcessingSchema = new mongoose.Schema(
       ref: "User",
       default: null,
     },
+    paymentDate: { type: Date, default: null }, // date of the latest payment
 
     raisedBy: {
       type: mongoose.Schema.Types.ObjectId,

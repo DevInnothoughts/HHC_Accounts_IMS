@@ -30,12 +30,18 @@ export default function PaymentDetail() {
   const [utrModal, setUtrModal] = useState(false);
   const [utrInput, setUtrInput] = useState("");
   const [utrSubmitting, setUtrSubmitting] = useState(false);
+  const [utrDate, setUtrDate] = useState(() =>
+    new Date().toISOString().slice(0, 10),
+  );
 
   const handleRecordUTR = async () => {
     if (!utrInput.trim()) return;
     setUtrSubmitting(true);
     try {
-      await api.patch(`/payments/${id}/utr`, { utrNumber: utrInput.trim() });
+      await api.patch(`/payments/${id}/utr`, {
+        utrNumber: utrInput.trim(),
+        paymentDate: utrDate || undefined,
+      });
       setUtrModal(false);
       setUtrInput("");
       fetchPayment();
@@ -337,6 +343,14 @@ export default function PaymentDetail() {
             {payment.utrNumber && (
               <InfoRow label="UTR Number" value={payment.utrNumber} mono />
             )}
+            {payment.paymentDate && (
+              <InfoRow
+                label="Payment Date"
+                value={new Date(payment.paymentDate).toLocaleDateString(
+                  "en-GB",
+                )}
+              />
+            )}
           </InfoCard>
 
           {/* Invoice Summary */}
@@ -535,127 +549,79 @@ export default function PaymentDetail() {
             )}
           </InfoCard>
 
-          {/* Payment Installments */}
-          {payment.installments?.length > 0 && (
-            <InfoCard title="💳 Payment Installments">
-              {payment.installments.map((inst, i) => (
-                <div
-                  key={i}
-                  style={{
-                    padding: "12px 0",
-                    borderBottom: "1px solid #f1f5f9",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 6,
-                  }}
-                >
+          {/* Payment Installments (partial payments) */}
+          {payment.installments?.length > 1 && (
+            <InfoCard title="⚡ Payment Installments">
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {payment.installments.map((inst, i) => (
                   <div
+                    key={inst._id || i}
                     style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 8,
+                      padding: "10px 12px",
+                      background: "#f8fafc",
                     }}
                   >
-                    <span
-                      style={{
-                        fontFamily: "monospace",
-                        fontWeight: 700,
-                        color: "#1a3c6e",
-                        fontSize: 13,
-                      }}
-                    >
-                      {inst.paymentId || `Installment ${i + 1}`}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 12,
-                        fontWeight: 600,
-                        padding: "2px 8px",
-                        borderRadius: 20,
-                        background:
-                          inst.status === "Processed" ? "#f0fdf4" : "#eff6ff",
-                        color:
-                          inst.status === "Processed" ? "#166534" : "#2563eb",
-                      }}
-                    >
-                      {inst.status}
-                    </span>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      fontSize: 13,
-                    }}
-                  >
-                    <span style={{ color: "#64748b" }}>Amount</span>
-                    <strong>
-                      ₹
-                      {inst.amount?.toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                      })}
-                    </strong>
-                  </div>
-                  {inst.utrNumber && (
                     <div
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
-                        fontSize: 13,
+                        alignItems: "center",
+                        marginBottom: 4,
                       }}
                     >
-                      <span style={{ color: "#64748b" }}>UTR</span>
                       <span
                         style={{
-                          fontFamily: "monospace",
+                          fontSize: 13,
                           fontWeight: 700,
-                          color: "#166534",
-                          background: "#dcfce7",
-                          padding: "2px 8px",
-                          borderRadius: 6,
+                          color: "#334155",
                         }}
                       >
-                        {inst.utrNumber}
+                        Installment {i + 1}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 13,
+                          fontWeight: 700,
+                          color: "#166534",
+                        }}
+                      >
+                        ₹
+                        {inst.amount?.toLocaleString("en-IN", {
+                          minimumFractionDigits: 2,
+                        })}
                       </span>
                     </div>
-                  )}
-                  {inst.utrRecordedAt && (
-                    <div style={{ fontSize: 11, color: "#94a3b8" }}>
-                      Processed:{" "}
-                      {new Date(inst.utrRecordedAt).toLocaleDateString("en-GB")}
-                    </div>
-                  )}
-                </div>
-              ))}
-              <div
-                style={{
-                  padding: "10px 0",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  fontWeight: 700,
-                  fontSize: 14,
-                }}
-              >
-                <span>Total Paid</span>
-                <span style={{ color: "#166534" }}>
-                  ₹
-                  {payment.paidAmount?.toLocaleString("en-IN", {
-                    minimumFractionDigits: 2,
-                  })}
-                  {payment.remainingAmount > 0 && (
-                    <span
+                    <div
                       style={{
-                        color: "#d97706",
-                        fontWeight: 400,
                         fontSize: 12,
-                        marginLeft: 8,
+                        color: "#64748b",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        gap: "2px 16px",
                       }}
                     >
-                      (₹{payment.remainingAmount?.toLocaleString("en-IN")}{" "}
-                      remaining)
-                    </span>
-                  )}
-                </span>
+                      <span>
+                        UTR:{" "}
+                        <span
+                          style={{ fontFamily: "monospace", color: "#334155" }}
+                        >
+                          {inst.utrNumber || "—"}
+                        </span>
+                      </span>
+                      <span>
+                        Paid on:{" "}
+                        {inst.paymentDate
+                          ? new Date(inst.paymentDate).toLocaleDateString(
+                              "en-GB",
+                            )
+                          : "—"}
+                      </span>
+                      <span>Status: {inst.status}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
             </InfoCard>
           )}
@@ -793,6 +759,33 @@ export default function PaymentDetail() {
                 onChange={(e) => setUtrInput(e.target.value.toUpperCase())}
                 autoFocus
               />
+              <label
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#475569",
+                  display: "block",
+                  marginBottom: 6,
+                }}
+              >
+                Payment Date
+              </label>
+              <input
+                type="date"
+                max={new Date().toISOString().slice(0, 10)}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: 8,
+                  fontSize: 14,
+                  outline: "none",
+                  boxSizing: "border-box",
+                  marginBottom: 16,
+                }}
+                value={utrDate}
+                onChange={(e) => setUtrDate(e.target.value)}
+              />
               <p style={{ fontSize: 12, color: "#94a3b8", marginBottom: 16 }}>
                 This will mark the payment as <strong>Payment Processed</strong>{" "}
                 and notify the branch user.
@@ -803,6 +796,7 @@ export default function PaymentDetail() {
                   onClick={() => {
                     setUtrModal(false);
                     setUtrInput("");
+                    setUtrDate(new Date().toISOString().slice(0, 10));
                   }}
                   disabled={utrSubmitting}
                 >
