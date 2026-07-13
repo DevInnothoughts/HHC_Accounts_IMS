@@ -380,6 +380,83 @@ export default function PaymentDetail() {
             <InfoRow label="IFSC" value={vendor?.ifscCode} mono />
           </InfoCard>
 
+          {/* Invoice Attachments */}
+          <InfoCard title="📎 Invoice Attachments">
+            {invoice?.attachments?.length > 0 ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {invoice.attachments.map((att, i) => {
+                  const meta = {
+                    invoice: { icon: "🧾", label: "Invoice" },
+                    quotation: { icon: "📋", label: "Quotation" },
+                    po: { icon: "📦", label: "Purchase Order" },
+                    challan: { icon: "🚚", label: "Challan" },
+                  }[att.type] || { icon: "📎", label: "Document" };
+                  return (
+                    <a
+                      key={att._id || i}
+                      href={att.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 12,
+                        padding: "10px 12px",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 8,
+                        textDecoration: "none",
+                        background: "#f8fafc",
+                      }}
+                    >
+                      <span style={{ fontSize: 20 }}>{meta.icon}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: "#334155",
+                            whiteSpace: "nowrap",
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {att.name || meta.label}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                          {meta.label}
+                          {att.uploadedAt
+                            ? ` · ${new Date(att.uploadedAt).toLocaleDateString("en-GB")}`
+                            : ""}
+                        </div>
+                      </div>
+                      <span
+                        style={{
+                          fontSize: 12,
+                          color: "#2563eb",
+                          fontWeight: 600,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        View →
+                      </span>
+                    </a>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                style={{
+                  padding: 16,
+                  color: "#94a3b8",
+                  textAlign: "center",
+                  fontSize: 13,
+                }}
+              >
+                No attachments on this invoice
+              </div>
+            )}
+          </InfoCard>
+
           {/* Approval History */}
           <InfoCard title="📜 Approval History">
             {payment.approvalHistory?.length === 0 ? (
