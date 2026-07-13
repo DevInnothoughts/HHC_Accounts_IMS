@@ -320,6 +320,54 @@ exports.approveInvoice = async (req, res) => {
         ).catch(console.error);
       }
 
+      // ✅ Notify the vendor that their Purchase Order has been approved.
+      //    CC the Cluster Head (the approver here) and attach the approved PO.
+      if (invoice.vendor?.email) {
+        const branchName = invoice.branch?.name || "—";
+        const clusterHeadName =
+          req.user.name || req.user.email || "Cluster Head";
+        const approvalDate = new Date().toLocaleDateString("en-GB");
+        const poNumber = invoice.requestId; // system reference — see note below
+
+        // Attach the approved PO document, falling back to the invoice file
+        const poDoc =
+          invoice.attachments?.find((a) => a.type === "po") ||
+          invoice.attachments?.find((a) => a.type === "invoice");
+        const attachments = poDoc?.url
+          ? [
+              {
+                filename: poDoc.name || `PO-${invoice.requestId}.pdf`,
+                path: poDoc.url,
+              },
+            ]
+          : [];
+
+        await sendNotificationEmail(
+          invoice.vendor.email,
+          `Purchase Order Approved – ${branchName}`,
+          `
+            <p>Dear Vendor,</p>
+            <p>A new Purchase Order has been approved by our Cluster Head and is now ready for processing.<br/>Please find attached the approved purchase order.</p>
+            <p><strong>Purchase Order Details:</strong></p>
+            <ul style="margin:8px 0;padding-left:20px;">
+              <li><strong>PO Number:</strong> ${poNumber}</li>
+              <li><strong>Approved By:</strong> ${clusterHeadName}</li>
+              <li><strong>Branch/Unit:</strong> ${branchName}</li>
+              <li><strong>Approval Date:</strong> ${approvalDate}</li>
+            </ul>
+            <p>Kindly acknowledge receipt of this email and initiate the production/dispatch process at the earliest.</p>
+            <p>If you have any queries regarding the order, please get in touch with the concerned Cluster Head or the Procurement Team before proceeding.</p>
+            <p>We request you to adhere to the agreed timelines and quality standards while fulfilling this order.</p>
+            <p>Thank you for your continued support.</p>
+            <p>Regards,<br/>Procurement Team<br/>Healing Hands Clinic</p>
+          `,
+          {
+            cc: req.user.email || undefined,
+            attachments,
+          },
+        ).catch(console.error);
+      }
+
       await completeSLATracking(invoice._id);
       // AFTER
     } else {
@@ -567,10 +615,13 @@ exports.getInvoices = async (req, res) => {
     if (status) query.status = status;
     if (priority) query.priority = priority;
     if (from || to) {
-      query.createdAt = {
-        ...(from && { $gte: new Date(from) }),
-        ...(to && { $lte: new Date(to) }),
-      };
+      query.createdAt = {};
+      if (from) query.createdAt.$gte = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999); // include the entire "to" day
+        query.createdAt.$lte = end;
+      }
     }
 
     if (search) {

@@ -40,15 +40,34 @@ export default function InvoiceRequests() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [searchParams] = useSearchParams();
-  const [filters, setFilters] = useState({
-    status: searchParams.get("status") || "",
-    priority: searchParams.get("priority") || "",
-    branch: searchParams.get("branch") || "",
+
+  // Restore last-used filters/search for this browser session so they survive
+  // navigating into an invoice and back. A URL param (e.g. a Dashboard link
+  // like ?status=Submitted) still takes precedence over the saved state.
+  const savedState = React.useMemo(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem("invoiceListState")) || {};
+    } catch {
+      return {};
+    }
+  }, []);
+  const [filters, setFilters] = useState(() => {
+    const urlFilters = {
+      status: searchParams.get("status") || "",
+      priority: searchParams.get("priority") || "",
+      branch: searchParams.get("branch") || "",
+      from: searchParams.get("from") || "",
+      to: searchParams.get("to") || "",
+    };
+    if (Object.values(urlFilters).some((v) => v)) return urlFilters;
+    return { ...urlFilters, ...(savedState.filters || {}) };
   });
   const [branches, setBranches] = useState([]);
   const [actionLoading, setActionLoading] = useState("");
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [search, setSearch] = useState(savedState.search || "");
+  const [debouncedSearch, setDebouncedSearch] = useState(
+    savedState.search || "",
+  );
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -58,11 +77,36 @@ export default function InvoiceRequests() {
     return () => clearTimeout(t);
   }, [search]);
 
+  // Remember filters + search for this session so they persist across navigation
+  useEffect(() => {
+    sessionStorage.setItem(
+      "invoiceListState",
+      JSON.stringify({ filters, search }),
+    );
+  }, [filters, search]);
+
   const handleQuickApprove = async (e, invoiceId) => {
     e.stopPropagation(); // prevent row click navigation
+
+    // Accounts approval requires a TDS % — collect it before approving
+    let tdsPercentage;
+    if (user?.role === "accounts") {
+      const input = window.prompt("Enter TDS % for this invoice (0–100):", "0");
+      if (input === null) return; // cancelled
+      const tds = parseFloat(input);
+      if (isNaN(tds) || tds < 0 || tds > 100) {
+        alert("TDS percentage must be a number between 0 and 100.");
+        return;
+      }
+      tdsPercentage = tds;
+    }
+
     setActionLoading(`approve_${invoiceId}`);
     try {
-      await api.patch(`/invoices/${invoiceId}/approve`, { remarks: "" });
+      await api.patch(`/invoices/${invoiceId}/approve`, {
+        remarks: "",
+        ...(tdsPercentage !== undefined && { tdsPercentage }),
+      });
       fetchInvoices();
     } catch (err) {
       alert(err.response?.data?.message || "Approval failed");
@@ -194,12 +238,45 @@ export default function InvoiceRequests() {
               ))}
             </select>
           )}
+
+          <div style={S.dateGroup}>
+            <label style={S.dateLabel}>From</label>
+            <input
+              type="date"
+              style={S.dateInput}
+              value={filters.from}
+              max={filters.to || undefined}
+              onChange={(e) => {
+                setFilters((f) => ({ ...f, from: e.target.value }));
+                setPage(1);
+              }}
+            />
+          </div>
+          <div style={S.dateGroup}>
+            <label style={S.dateLabel}>To</label>
+            <input
+              type="date"
+              style={S.dateInput}
+              value={filters.to}
+              min={filters.from || undefined}
+              onChange={(e) => {
+                setFilters((f) => ({ ...f, to: e.target.value }));
+                setPage(1);
+              }}
+            />
+          </div>
           <button
             style={S.resetBtn}
             onClick={() => {
               setSearch("");
               setDebouncedSearch("");
-              setFilters({ status: "", priority: "", branch: "" });
+              setFilters({
+                status: "",
+                priority: "",
+                branch: "",
+                from: "",
+                to: "",
+              });
               setPage(1);
             }}
           >
@@ -302,11 +379,16 @@ export default function InvoiceRequests() {
                           const currentStep = INVOICE_WORKFLOW.find(
                             (w) => w.status === inv.status,
                           );
+                          // Branches without a partner send invoices straight to
+                          // accounts at the "Submitted" stage — treat that as the
+                          // accounts user's turn too.
+                          const partnerSkipped =
+                            inv.partnerSkipped && inv.status === "Submitted";
                           const isMyTurn =
-                            currentStep?.actingRole === user?.role;
+                            currentStep?.actingRole === user?.role ||
+                            (partnerSkipped && user?.role === "accounts");
                           if (!isMyTurn) return null;
-                          const showApprove = user?.role !== "accounts";
-                          if (!isMyTurn) return null;
+                          const showApprove = true;
                           const approveLoading =
                             actionLoading === `approve_${inv._id}`;
                           const rejectLoading =
@@ -446,6 +528,17 @@ const S = {
     borderRadius: 8,
     fontSize: 14,
     background: "#fff",
+  },
+  dateGroup: { display: "flex", alignItems: "center", gap: 6 },
+  dateLabel: { fontSize: 12, fontWeight: 600, color: "#64748b" },
+  dateInput: {
+    padding: "9px 12px",
+    border: `1.5px solid ${C.border}`,
+    borderRadius: 8,
+    fontSize: 14,
+    background: "#fff",
+    color: "#334155",
+    outline: "none",
   },
   resetBtn: {
     padding: "9px 14px",

@@ -72,24 +72,24 @@ const sendOTPEmail = async (email, otp) => {
   }
 };
 
-const sendNotificationEmail = async (to, subject, message) => {
+const sendNotificationEmail = async (to, subject, message, options = {}) => {
   try {
     const info = await transporter.sendMail({
       from: `"PMS - HHC" <${process.env.SMTP_USER}>`,
       to,
+      ...(options.cc ? { cc: options.cc } : {}),
+      ...(options.attachments ? { attachments: options.attachments } : {}),
       subject,
       html: `
-        <div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;">
+        <div style="font-family:Arial,sans-serif;max-width:560px;margin:auto;">
           <div style="background:#1a3c6e;padding:20px;text-align:center;">
             <h3 style="color:#fff;margin:0;">
               Payment Management System
             </h3>
           </div>
 
-          <div style="padding:24px;border:1px solid #e0e0e0;border-top:none;">
-            <p style="color:#333;font-size:15px;">
-              ${message}
-            </p>
+          <div style="padding:24px;border:1px solid #e0e0e0;border-top:none;color:#333;font-size:15px;line-height:1.6;">
+            ${message}
           </div>
         </div>
       `,

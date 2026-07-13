@@ -33,13 +33,29 @@ export default function Vendors() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
   const [searchParams] = useSearchParams();
-  const [filters, setFilters] = useState({
-    status: "",
-    category: "",
-    branch: "",
-    approvalStatus: searchParams.get("approvalStatus") || "", // ✅ honor dashboard deep-links
+
+  // Restore last-used filters/search for this browser session so they survive
+  // navigating into a vendor and back. A dashboard deep-link
+  // (?approvalStatus=...) still takes precedence over the saved state.
+  const savedState = React.useMemo(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem("vendorListState")) || {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const [search, setSearch] = useState(savedState.search || "");
+  const [filters, setFilters] = useState(() => {
+    const urlFilters = {
+      status: "",
+      category: "",
+      branch: "",
+      approvalStatus: searchParams.get("approvalStatus") || "",
+    };
+    if (Object.values(urlFilters).some((v) => v)) return urlFilters;
+    return { ...urlFilters, ...(savedState.filters || {}) };
   });
   const [branches, setBranches] = useState([]);
   const [deleteModal, setDeleteModal] = useState(null);
@@ -63,9 +79,18 @@ export default function Vendors() {
     }
   }, [user]);
 
+  // Remember filters + search for this session so they persist across navigation
+  useEffect(() => {
+    sessionStorage.setItem(
+      "vendorListState",
+      JSON.stringify({ filters, search }),
+    );
+  }, [filters, search]);
+
   const canManage = ["branch_user", "accounts", "super_admin"].includes(
     user?.role,
   );
+
   const canChangeStatus = ["accounts", "super_admin"].includes(user?.role);
 
   const fetchVendors = useCallback(async () => {

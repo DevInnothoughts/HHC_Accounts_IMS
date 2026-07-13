@@ -23,7 +23,18 @@ export default function PaymentProcessing() {
   const navigate = useNavigate();
   const { user: authUser } = useAuth();
 
-  const [tab, setTab] = useState("raise"); // 'raise' | 'processing'
+  // Restore last-used tab/filters for this browser session so they survive
+  // navigating into a payment and back.
+  const savedState = React.useMemo(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem("paymentListState")) || {};
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const [tab, setTab] = useState(savedState.tab || "raise"); // 'raise' | 'processing'
+
   const [invoices, setInvoices] = useState([]);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -44,14 +55,28 @@ export default function PaymentProcessing() {
   const [utrSubmitting, setUtrSubmitting] = useState(false);
   const [processedPayments, setProcessedPayments] = useState([]);
   const [branches, setBranches] = useState([]);
-  const [branchFilter, setBranchFilter] = useState("");
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [branchFilter, setBranchFilter] = useState(
+    savedState.branchFilter || "",
+  );
+  const [search, setSearch] = useState(savedState.search || "");
+  const [debouncedSearch, setDebouncedSearch] = useState(
+    savedState.search || "",
+  );
+  const [dateFrom, setDateFrom] = useState(savedState.dateFrom || "");
+  const [dateTo, setDateTo] = useState(savedState.dateTo || "");
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
     return () => clearTimeout(t);
   }, [search]);
+
+  // Remember tab + filters for this session so they persist across navigation
+  useEffect(() => {
+    sessionStorage.setItem(
+      "paymentListState",
+      JSON.stringify({ tab, branchFilter, search, dateFrom, dateTo }),
+    );
+  }, [tab, branchFilter, search, dateFrom, dateTo]);
 
   useEffect(() => {
     if (["accounts", "super_admin", "cluster_head"].includes(authUser?.role)) {
@@ -70,6 +95,8 @@ export default function PaymentProcessing() {
       const base = new URLSearchParams();
       if (branchFilter) base.set("branch", branchFilter);
       if (debouncedSearch) base.set("search", debouncedSearch);
+      if (dateFrom) base.set("from", dateFrom);
+      if (dateTo) base.set("to", dateTo);
       const suffix = base.toString() ? `?${base}` : "";
 
       const processedParams = new URLSearchParams(base);
@@ -105,7 +132,7 @@ export default function PaymentProcessing() {
     } finally {
       setLoading(false);
     }
-  }, [branchFilter, debouncedSearch]);
+  }, [branchFilter, debouncedSearch, dateFrom, dateTo]);
 
   useEffect(() => {
     fetchData();
@@ -296,7 +323,7 @@ export default function PaymentProcessing() {
             marginBottom: 16,
             flexWrap: "wrap",
             alignItems: "center",
-            maxWidth: 640,
+            maxWidth: 1000,
           }}
         >
           <input
@@ -314,6 +341,47 @@ export default function PaymentProcessing() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>
+              From
+            </label>
+            <input
+              type="date"
+              value={dateFrom}
+              max={dateTo || undefined}
+              onChange={(e) => setDateFrom(e.target.value)}
+              style={{
+                padding: "9px 12px",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                fontSize: 14,
+                background: "#fff",
+                color: "#334155",
+                outline: "none",
+              }}
+            />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}>
+              To
+            </label>
+            <input
+              type="date"
+              value={dateTo}
+              min={dateFrom || undefined}
+              onChange={(e) => setDateTo(e.target.value)}
+              style={{
+                padding: "9px 12px",
+                border: "1.5px solid #e2e8f0",
+                borderRadius: 8,
+                fontSize: 14,
+                background: "#fff",
+                color: "#334155",
+                outline: "none",
+              }}
+            />
+          </div>
 
           {["accounts", "super_admin", "cluster_head"].includes(
             authUser?.role,
@@ -333,6 +401,25 @@ export default function PaymentProcessing() {
               />
             </div>
           )}
+          <button
+            onClick={() => {
+              setSearch("");
+              setBranchFilter("");
+              setDateFrom("");
+              setDateTo("");
+            }}
+            style={{
+              padding: "9px 14px",
+              background: "#f1f5f9",
+              border: "1px solid #e2e8f0",
+              borderRadius: 8,
+              fontSize: 13,
+              cursor: "pointer",
+              color: "#475569",
+            }}
+          >
+            Reset
+          </button>
         </div>
 
         {loading ? (

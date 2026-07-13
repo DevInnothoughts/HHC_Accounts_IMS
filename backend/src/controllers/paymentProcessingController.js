@@ -17,7 +17,7 @@ const getPaymentWorkflowStep = (status) =>
 // ── List approved invoices available for payment ───────────
 exports.getApprovedInvoicesForPayment = async (req, res) => {
   try {
-    const { branch, search, page = 1, limit = 20 } = req.query;
+    const { branch, search, from, to, page = 1, limit = 20 } = req.query;
     const query = {
       status: "Cluster Head Approved",
       paymentRequest: { $ne: null }, // has a payment record
@@ -39,6 +39,16 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       }
     } else if (branch) {
       query.branch = branch;
+    }
+
+    if (from || to) {
+      query.createdAt = {};
+      if (from) query.createdAt.$gte = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = end;
+      }
     }
 
     if (search) {
@@ -80,7 +90,15 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
 // ── List payment processing records ───────────────────────
 exports.getPayments = async (req, res) => {
   try {
-    const { status, search, branch, page = 1, limit = 20 } = req.query;
+    const {
+      status,
+      search,
+      branch,
+      from,
+      to,
+      page = 1,
+      limit = 20,
+    } = req.query;
     const query = {};
 
     // AFTER
@@ -107,6 +125,16 @@ exports.getPayments = async (req, res) => {
       query.status = status;
     } else {
       query.status = { $ne: "Payment Pending" };
+    }
+
+    if (from || to) {
+      query.createdAt = {};
+      if (from) query.createdAt.$gte = new Date(from);
+      if (to) {
+        const end = new Date(to);
+        end.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = end;
+      }
     }
 
     if (search) {
@@ -418,6 +446,17 @@ exports.generateExcel = async (req, res) => {
     const vendor = invoice?.vendor;
     const branch = invoice?.branch;
 
+    // Remark entered by the accounts team during payment approval
+    // (the "Accounts Final Approval" step) — lives in approvalHistory,
+    // not in paymentRemarks (which is the raise-time remark).
+    const accountsPaymentRemark =
+      [...(payment.approvalHistory || [])]
+        .reverse()
+        .find(
+          (h) =>
+            h.action === "approved" && h.stage === "Accounts Final Approval",
+        )?.remarks || "—";
+
     const isRegeneration = payment.status === PAYMENT_STATUS.EXCEL_GENERATED;
     if (!isRegeneration) {
       payment.status = PAYMENT_STATUS.EXCEL_GENERATED;
@@ -465,7 +504,7 @@ exports.generateExcel = async (req, res) => {
     };
 
     // Title row
-    sheet.mergeCells("A1:J1");
+    sheet.mergeCells("A1:K1");
     const titleCell = sheet.getCell("A1");
     titleCell.value = "HEALING HANDS CLINIC — PAYMENT INSTRUCTION";
     titleCell.font = { bold: true, size: 14, color: { argb: "FF1A3C6E" } };
@@ -473,7 +512,7 @@ exports.generateExcel = async (req, res) => {
     sheet.getRow(1).height = 30;
 
     // Subtitle row
-    sheet.mergeCells("A2:J2");
+    sheet.mergeCells("A2:K2");
     const subCell = sheet.getCell("A2");
     subCell.value = `Payment ID: ${payment.paymentId}  |  Invoice: ${invoice?.requestId}  |  Date: ${new Date().toLocaleDateString("en-GB")}`;
     subCell.font = { size: 10, color: { argb: "FF6B7280" } };
@@ -494,6 +533,7 @@ exports.generateExcel = async (req, res) => {
       "Payment Mode",
       "Amount (₹)",
       "Branch",
+      "Payment Remark",
     ];
 
     const headerRow = sheet.addRow(headers);
@@ -517,6 +557,7 @@ exports.generateExcel = async (req, res) => {
       payment.paymentMode,
       payment.paymentAmount,
       branch?.name,
+      accountsPaymentRemark,
     ]);
 
     dataRow.height = 20;
@@ -531,6 +572,12 @@ exports.generateExcel = async (req, res) => {
         cell.font = { bold: true, color: { argb: "FF16A34A" } };
       }
     });
+
+    dataRow.getCell(11).alignment = {
+      horizontal: "left",
+      vertical: "middle",
+      wrapText: true,
+    };
 
     sheet.addRow([]); // spacer
 
@@ -592,6 +639,7 @@ exports.generateExcel = async (req, res) => {
       { width: 14 },
       { width: 14 },
       { width: 18 },
+      { width: 34 },
     ];
 
     await payment.save();
