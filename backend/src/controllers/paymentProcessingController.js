@@ -446,16 +446,8 @@ exports.generateExcel = async (req, res) => {
     const vendor = invoice?.vendor;
     const branch = invoice?.branch;
 
-    // Remark entered by the accounts team during payment approval
-    // (the "Accounts Final Approval" step) — lives in approvalHistory,
-    // not in paymentRemarks (which is the raise-time remark).
-    const accountsPaymentRemark =
-      [...(payment.approvalHistory || [])]
-        .reverse()
-        .find(
-          (h) =>
-            h.action === "approved" && h.stage === "Accounts Final Approval",
-        )?.remarks || "—";
+    // Payment remark column = the invoice's own remarks field
+    const paymentRemark = invoice?.remarks || "—";
 
     const isRegeneration = payment.status === PAYMENT_STATUS.EXCEL_GENERATED;
     if (!isRegeneration) {
@@ -557,7 +549,7 @@ exports.generateExcel = async (req, res) => {
       payment.paymentMode,
       payment.paymentAmount,
       branch?.name,
-      accountsPaymentRemark,
+      paymentRemark,
     ]);
 
     dataRow.height = 20;
@@ -723,7 +715,7 @@ exports.bulkGenerateExcel = async (req, res) => {
     })
       .populate(
         "invoiceRequest",
-        "requestId invoiceNumber invoiceDate amount gstAmount tdsAmount netPayable description",
+        "requestId invoiceNumber invoiceDate amount gstAmount tdsAmount netPayable description remarks",
       )
       .populate(
         "vendor",
@@ -802,13 +794,7 @@ exports.bulkGenerateExcel = async (req, res) => {
     payments.forEach((pay, idx) => {
       const inv = pay.invoiceRequest;
       const vendor = pay.vendor;
-      const accountsRemark =
-        [...(pay.approvalHistory || [])]
-          .reverse()
-          .find(
-            (h) =>
-              h.action === "approved" && h.stage === "Accounts Final Approval",
-          )?.remarks || "—";
+
       const row = sheet.addRow({
         paymentId: pay.paymentId,
         invoiceId: inv?.requestId || "—",
@@ -834,7 +820,7 @@ exports.bulkGenerateExcel = async (req, res) => {
           ? new Date(pay.scheduledDate).toLocaleDateString("en-GB")
           : "—",
         remarks: pay.paymentRemarks || "—",
-        paymentRemark: accountsRemark,
+        paymentRemark: inv?.remarks || "—",
         status: pay.status,
       });
 
