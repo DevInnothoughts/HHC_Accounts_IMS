@@ -779,7 +779,8 @@ exports.bulkGenerateExcel = async (req, res) => {
       { header: "Net Payable (₹)", key: "netPayable", width: 16 },
       { header: "Payment Amount (₹)", key: "paymentAmount", width: 18 },
       { header: "Scheduled Date", key: "scheduledDate", width: 16 },
-      { header: "Remarks", key: "remarks", width: 24 },
+      { header: "Raise Remark", key: "remarks", width: 24 },
+      { header: "Payment Remark", key: "paymentRemark", width: 24 },
       { header: "Status", key: "status", width: 18 },
     ];
 
@@ -801,6 +802,13 @@ exports.bulkGenerateExcel = async (req, res) => {
     payments.forEach((pay, idx) => {
       const inv = pay.invoiceRequest;
       const vendor = pay.vendor;
+      const accountsRemark =
+        [...(pay.approvalHistory || [])]
+          .reverse()
+          .find(
+            (h) =>
+              h.action === "approved" && h.stage === "Accounts Final Approval",
+          )?.remarks || "—";
       const row = sheet.addRow({
         paymentId: pay.paymentId,
         invoiceId: inv?.requestId || "—",
@@ -826,6 +834,7 @@ exports.bulkGenerateExcel = async (req, res) => {
           ? new Date(pay.scheduledDate).toLocaleDateString("en-GB")
           : "—",
         remarks: pay.paymentRemarks || "—",
+        paymentRemark: accountsRemark,
         status: pay.status,
       });
 
