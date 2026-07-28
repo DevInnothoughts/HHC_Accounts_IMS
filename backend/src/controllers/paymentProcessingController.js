@@ -119,10 +119,14 @@ exports.getPayments = async (req, res) => {
       query.branch = branch;
     }
 
+    const validStatus =
+      status && Object.values(PAYMENT_STATUS).includes(status) ? status : null;
+
     if (req.query.processedOnly === "true") {
       query.utrNumber = { $ne: null, $exists: true };
-    } else if (status) {
-      query.status = status;
+      if (validStatus) query.status = validStatus; // ← now combinable
+    } else if (validStatus) {
+      query.status = validStatus;
     } else {
       query.status = { $ne: "Payment Pending" };
     }

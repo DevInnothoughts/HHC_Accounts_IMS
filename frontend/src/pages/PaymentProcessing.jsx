@@ -7,6 +7,31 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { PAYMENT_WORKFLOW } from "../config/constants";
 import SearchableSelect from "../components/SearchableSelect.jsx";
 
+// Local-date ISO (avoid toISOString() UTC shift for IST users)
+const toISO = (d) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+
+const DEFAULT_RANGE = () => {
+  const to = new Date();
+  const from = new Date();
+  from.setDate(to.getDate() - 29); // last 30 days, today inclusive
+  return { from: toISO(from), to: toISO(to) };
+};
+
+// Status options per section
+const STATUS_OPTIONS = {
+  raise: [], // invoices here are always "Cluster Head Approved"
+  processing: [
+    "Payment Raised",
+    "Accounts Approved",
+    "Excel Generated",
+    "Payment Rejected",
+  ],
+  processed: ["Payment Processed", "Partially Paid", "Fully Paid"],
+};
+
 const STATUS_STYLES = {
   "Payment Pending": { bg: "#f1f5f9", color: "#475569", icon: "⏳" },
   "Payment Raised": { bg: "#eff6ff", color: "#2563eb", icon: "📤" },
@@ -62,8 +87,17 @@ export default function PaymentProcessing() {
   const [debouncedSearch, setDebouncedSearch] = useState(
     savedState.search || "",
   );
-  const [dateFrom, setDateFrom] = useState(savedState.dateFrom || "");
-  const [dateTo, setDateTo] = useState(savedState.dateTo || "");
+  const [dateFrom, setDateFrom] = useState(() =>
+    savedState.dateFrom !== undefined
+      ? savedState.dateFrom
+      : DEFAULT_RANGE().from,
+  );
+  const [dateTo, setDateTo] = useState(() =>
+    savedState.dateTo !== undefined ? savedState.dateTo : DEFAULT_RANGE().to,
+  );
+  const [statusFilter, setStatusFilter] = useState(
+    savedState.statusFilter || "",
+  );
   const [utrDate, setUtrDate] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
@@ -73,13 +107,35 @@ export default function PaymentProcessing() {
     return () => clearTimeout(t);
   }, [search]);
 
-  // Remember tab + filters for this session so they persist across navigation
   useEffect(() => {
     sessionStorage.setItem(
       "paymentListState",
-      JSON.stringify({ tab, branchFilter, search, dateFrom, dateTo }),
+      JSON.stringify({
+        tab,
+        branchFilter,
+        search,
+        dateFrom,
+        dateTo,
+        statusFilter,
+      }),
     );
-  }, [tab, branchFilter, search, dateFrom, dateTo]);
+  }, [tab, branchFilter, search, dateFrom, dateTo, statusFilter]);
+
+  const handleTabChange = (next) => {
+    if (next === tab) return;
+    setTab(next);
+    setStatusFilter(""); // options differ per section
+    setSelectedIds([]);
+  };
+
+  const resetFilters = () => {
+    const d = DEFAULT_RANGE();
+    setSearch("");
+    setBranchFilter("");
+    setStatusFilter("");
+    setDateFrom(d.from);
+    setDateTo(d.to);
+  };
 
   useEffect(() => {
     if (["accounts", "super_admin", "cluster_head"].includes(authUser?.role)) {
@@ -100,15 +156,20 @@ export default function PaymentProcessing() {
       if (debouncedSearch) base.set("search", debouncedSearch);
       if (dateFrom) base.set("from", dateFrom);
       if (dateTo) base.set("to", dateTo);
-      const suffix = base.toString() ? `?${base}` : "";
+
+      const payParams = new URLSearchParams(base);
+      if (STATUS_OPTIONS.processing.includes(statusFilter))
+        payParams.set("status", statusFilter);
 
       const processedParams = new URLSearchParams(base);
       processedParams.set("processedOnly", "true");
       processedParams.set("limit", "100");
+      if (STATUS_OPTIONS.processed.includes(statusFilter))
+        processedParams.set("status", statusFilter);
 
       const [invRes, payRes, processedRes] = await Promise.all([
-        api.get(`/payments/approved-invoices${suffix}`),
-        api.get(`/payments${suffix}`),
+        api.get(`/payments/approved-invoices?${base}`),
+        api.get(`/payments?${payParams}`),
         api.get(`/payments?${processedParams}`),
       ]);
       setInvoices(
@@ -135,7 +196,7 @@ export default function PaymentProcessing() {
     } finally {
       setLoading(false);
     }
-  }, [branchFilter, debouncedSearch, dateFrom, dateTo]);
+  }, [branchFilter, debouncedSearch, dateFrom, dateTo, statusFilter]);
 
   useEffect(() => {
     fetchData();
@@ -387,6 +448,53 @@ export default function PaymentProcessing() {
               }}
             />
           </div>
+
+          {STATUS_OPTIONS[tab].length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <label
+                style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}
+              >
+                Status
+              </label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                style={{
+                  padding: "9px 12px",
+                  border: "1.5px solid #e2e8f0",
+                  borderRadius: 8,
+                  fontSize: 14,
+                  background: "#fff",
+                  color: "#334155",
+                  outline: "none",
+                  minWidth: 170,
+                }}
+              >
+                <option value="">All Statuses</option>
+                {STATUS_OPTIONS[tab].map((s) => (
+                  <option key={s} value={s}>
+                    {STATUS_STYLES[s]?.icon} {s}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <button
+            onClick={resetFilters}
+            style={{
+              padding: "9px 14px",
+              border: "1.5px solid #e2e8f0",
+              borderRadius: 8,
+              background: "#fff",
+              color: "#475569",
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            ↺ Last 30 days
+          </button>
 
           {["accounts", "super_admin", "cluster_head"].includes(
             authUser?.role,
