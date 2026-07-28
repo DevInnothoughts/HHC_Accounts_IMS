@@ -11,6 +11,21 @@ const {
 const { logAction } = require("../services/auditService");
 const { sendNotificationEmail } = require("../services/emailService");
 
+// "Payment Remark" cell = invoice remarks + description.
+// Remarks are frequently left blank, so the description keeps the column useful.
+const buildRemarkText = (invoice) => {
+  const parts = [invoice?.remarks, invoice?.description]
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter(Boolean);
+
+  // If the same text was entered in both fields, show it once
+  const unique = parts.filter(
+    (v, i) => parts.findIndex((p) => p.toLowerCase() === v.toLowerCase()) === i,
+  );
+
+  return unique.length ? unique.join(" | ") : "—";
+};
+
 const getPaymentWorkflowStep = (status) =>
   PAYMENT_WORKFLOW.find((w) => w.status === status) || null;
 
@@ -450,8 +465,8 @@ exports.generateExcel = async (req, res) => {
     const vendor = invoice?.vendor;
     const branch = invoice?.branch;
 
-    // Payment remark column = the invoice's own remarks field
-    const paymentRemark = invoice?.remarks || "—";
+    // Payment remark column = invoice remarks, falling back to / combined with description
+    const paymentRemark = buildRemarkText(invoice); // was: invoice?.remarks || "—"
 
     const isRegeneration = payment.status === PAYMENT_STATUS.EXCEL_GENERATED;
     if (!isRegeneration) {
@@ -823,8 +838,8 @@ exports.bulkGenerateExcel = async (req, res) => {
         scheduledDate: pay.scheduledDate
           ? new Date(pay.scheduledDate).toLocaleDateString("en-GB")
           : "—",
-        remarks: pay.paymentRemarks || "—",
-        paymentRemark: inv?.remarks || "—",
+        remarks: pay.paymentRemarks || "—", // "Raise Remark" — unchanged
+        paymentRemark: buildRemarkText(inv), // was: inv?.remarks || "—"
         status: pay.status,
       });
 
