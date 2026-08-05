@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const PaymentProcessing = require("../models/PaymentProcessing");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const User = require("../models/User");
@@ -29,10 +30,46 @@ const buildRemarkText = (invoice) => {
 const getPaymentWorkflowStep = (status) =>
   PAYMENT_WORKFLOW.find((w) => w.status === status) || null;
 
+// Statuses that mean money has already gone out — kept out of the
+// "Payment Requests" list, which only shows in-flight work.
+const PROCESSED_STATUSES = [
+  PAYMENT_STATUS.PROCESSED,
+  PAYMENT_STATUS.PARTIALLY_PAID,
+  PAYMENT_STATUS.FULLY_PAID,
+];
+
+// Payment statuses that still need action on the "Approved Invoices" tab.
+const RAISEABLE_STATUSES = [
+  PAYMENT_STATUS.PENDING, // nothing raised yet
+  PAYMENT_STATUS.PARTIALLY_PAID, // part raised & paid, balance outstanding
+  PAYMENT_STATUS.REJECTED, // bounced back, needs re-raising
+];
+
+// Bounded id lookup. NOTE: `.limit(n).distinct()` does NOT work — chaining
+// distinct issues a distinct command, which has no limit option, so the cap is
+// silently ignored. find + select + limit is the working form.
+const limitedIds = async (Model, filter, cap = 500) => {
+  const docs = await Model.find(filter).select("_id").limit(cap).lean();
+  return docs.map((d) => d._id);
+};
+
+// find() casts strings to ObjectId from the schema; aggregate() does NOT.
+// Anything that feeds both paths has to be cast explicitly.
+const toId = (v) =>
+  mongoose.isValidObjectId(v) ? new mongoose.Types.ObjectId(String(v)) : null;
+
+// Page size guard: prevents a hand-edited ?limit=100000 from pulling the
+// whole collection now that there is no default date window.
+const clampPaging = ({ page, limit }, fallback = 20) => ({
+  currentPage: Math.max(Number(page) || 1, 1),
+  perPage: Math.min(Math.max(Number(limit) || fallback, 1), 100),
+});
+
 // ── List approved invoices available for payment ───────────
 exports.getApprovedInvoicesForPayment = async (req, res) => {
   try {
-    const { branch, search, from, to, page = 1, limit = 20 } = req.query;
+    const { branch, search, from, to, paymentStatus } = req.query;
+    const { currentPage, perPage } = clampPaging(req.query);
     const query = {
       status: "Cluster Head Approved",
       paymentRequest: { $ne: null }, // has a payment record
@@ -48,12 +85,12 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
     if (branchScopedRoles.includes(req.user.role)) {
       const assigned = req.user.branches.map((b) => b._id.toString());
       if (branch && assigned.includes(branch.toString())) {
-        query.branch = branch;
+        query.branch = toId(branch);
       } else {
         query.branch = { $in: req.user.branches.map((b) => b._id) };
       }
     } else if (branch) {
-      query.branch = branch;
+      query.branch = toId(branch);
     }
 
     if (from || to) {
@@ -66,11 +103,40 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       }
     }
 
+    // Snapshot before the payment-status filter narrows things: this is the
+    // "All" set, and the denominator every chip count is measured against.
+    const baseQuery = { ...query };
+
+    // Same scope but WITHOUT the "has a payment record" precondition. Approved
+    // invoices with no linked PaymentProcessing row have always been invisible
+    // in this module, which is the usual reason its total is lower than the
+    // approved-invoice count shown elsewhere (e.g. the dashboard).
+    const scopeQuery = { ...query };
+    delete scopeQuery.paymentRequest;
+
+    // ── Payment-status filter (quick filters on Approved Invoices) ──────
+    // The status lives on the linked PaymentProcessing record, so resolve the
+    // matching payment ids first, then constrain the invoice query by them.
+    if (paymentStatus && RAISEABLE_STATUSES.includes(paymentStatus)) {
+      const payIds = await limitedIds(
+        PaymentProcessing,
+        {
+          status: paymentStatus,
+          ...(query.branch ? { branch: query.branch } : {}),
+        },
+        2000,
+      );
+      // An empty $in returns nothing, which is the correct answer here.
+      query.paymentRequest = { $in: payIds };
+    }
+
     if (search) {
       const rx = { $regex: search.trim(), $options: "i" };
-      const vendorIds = await Vendor.find({
+      // Capped: without a date window a broad term could otherwise build a
+      // huge in-memory $in array.
+      const vendorIds = await limitedIds(Vendor, {
         $or: [{ vendorName: rx }, { companyName: rx }],
-      }).distinct("_id");
+      });
       query.$or = [
         { requestId: rx },
         { invoiceNumber: rx },
@@ -79,6 +145,51 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
     }
 
     const total = await InvoiceRequest.countDocuments(query);
+
+    // Chip counts. Computed from the unfiltered base set so they stay stable
+    // whichever chip is active, and so the parts visibly sum to the whole.
+    let statusCounts = null;
+    let baseTotal = total;
+    let unlinked = 0;
+    let approvedWithoutPaymentRecord = 0;
+    if (req.query.withCounts === "true") {
+      const [agg, baseCount, orphanCount] = await Promise.all([
+        InvoiceRequest.aggregate([
+          { $match: baseQuery },
+          {
+            $lookup: {
+              from: "paymentprocessings",
+              localField: "paymentRequest",
+              foreignField: "_id",
+              as: "pay",
+            },
+          },
+          { $unwind: "$pay" },
+          { $group: { _id: "$pay.status", n: { $sum: 1 } } },
+        ]),
+        InvoiceRequest.countDocuments(baseQuery),
+        InvoiceRequest.countDocuments({
+          ...scopeQuery,
+          paymentRequest: null,
+        }),
+      ]);
+      approvedWithoutPaymentRecord = orphanCount;
+      statusCounts = agg.reduce((acc, r) => {
+        acc[r._id] = r.n;
+        return acc;
+      }, {});
+      baseTotal = baseCount;
+      // Invoices whose paymentRequest points at a missing payment record.
+      // Should be 0; a non-zero value means the counts won't sum to the total.
+      unlinked =
+        baseCount - Object.values(statusCounts).reduce((s, n) => s + n, 0);
+      if (unlinked !== 0) {
+        console.warn(
+          `[approved-invoices] ${unlinked} invoice(s) have a dangling paymentRequest reference`,
+        );
+      }
+    }
+
     const invoices = await InvoiceRequest.find(query)
       .populate("branch", "name code")
       .populate(
@@ -88,14 +199,18 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       .populate("paymentRequest")
       .populate("createdBy", "name email")
       .sort({ updatedAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(Number(limit));
+      .skip((currentPage - 1) * perPage)
+      .limit(perPage);
 
     res.json({
       invoices,
-      total,
-      page: Number(page),
-      pages: Math.ceil(total / limit),
+      total, // rows matching the active filter
+      baseTotal, // rows ignoring the payment-status filter ("All")
+      statusCounts, // { "Payment Pending": n, ... } or null
+      unlinked, // paymentRequest set but the payment row is gone
+      approvedWithoutPaymentRecord, // approved, but no payment row was created
+      page: currentPage,
+      pages: Math.ceil(total / perPage),
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -111,9 +226,10 @@ exports.getPayments = async (req, res) => {
       branch,
       from,
       to,
-      page = 1,
-      limit = 20,
+      processedOnly,
+      excludeProcessed,
     } = req.query;
+    const { currentPage, perPage } = clampPaging(req.query);
     const query = {};
 
     // AFTER
@@ -137,13 +253,19 @@ exports.getPayments = async (req, res) => {
     const validStatus =
       status && Object.values(PAYMENT_STATUS).includes(status) ? status : null;
 
-    if (req.query.processedOnly === "true") {
+    if (processedOnly === "true") {
       query.utrNumber = { $ne: null, $exists: true };
-      if (validStatus) query.status = validStatus; // ← now combinable
+      if (validStatus) query.status = validStatus; // combinable
+    } else if (excludeProcessed === "true") {
+      // "Payment Requests" tab: in-flight only. Filtered here rather than on
+      // the client so `total` and the page slice agree.
+      query.status = validStatus
+        ? validStatus
+        : { $nin: [PAYMENT_STATUS.PENDING, ...PROCESSED_STATUSES] };
     } else if (validStatus) {
       query.status = validStatus;
     } else {
-      query.status = { $ne: "Payment Pending" };
+      query.status = { $ne: PAYMENT_STATUS.PENDING };
     }
 
     if (from || to) {
@@ -158,13 +280,12 @@ exports.getPayments = async (req, res) => {
 
     if (search) {
       const rx = { $regex: search.trim(), $options: "i" };
+      // Capped: see note on limitedIds.
       const [vendorIds, invoiceIds] = await Promise.all([
-        Vendor.find({
-          $or: [{ vendorName: rx }, { companyName: rx }],
-        }).distinct("_id"),
-        InvoiceRequest.find({
+        limitedIds(Vendor, { $or: [{ vendorName: rx }, { companyName: rx }] }),
+        limitedIds(InvoiceRequest, {
           $or: [{ requestId: rx }, { invoiceNumber: rx }],
-        }).distinct("_id"),
+        }),
       ]);
       query.$or = [
         { paymentId: rx },
@@ -184,14 +305,14 @@ exports.getPayments = async (req, res) => {
       .populate("vendor", "vendorName companyName")
       .populate("raisedBy", "name email")
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(Number(limit));
+      .skip((currentPage - 1) * perPage)
+      .limit(perPage);
 
     res.json({
       payments,
       total,
-      page: Number(page),
-      pages: Math.ceil(total / limit),
+      page: currentPage,
+      pages: Math.ceil(total / perPage),
     });
   } catch (err) {
     res.status(500).json({ message: err.message });
@@ -734,7 +855,7 @@ exports.bulkGenerateExcel = async (req, res) => {
     })
       .populate(
         "invoiceRequest",
-        "requestId invoiceNumber invoiceDate amount gstAmount tdsAmount netPayable description remarks",
+        "requestId invoiceNumber invoiceDate amount gstAmount tdsAmount roundOff netPayable description remarks",
       )
       .populate(
         "vendor",
@@ -791,7 +912,7 @@ exports.bulkGenerateExcel = async (req, res) => {
       { header: "Payment Amount (₹)", key: "paymentAmount", width: 18 },
       { header: "Scheduled Date", key: "scheduledDate", width: 16 },
       { header: "Raise Remark", key: "remarks", width: 24 },
-      { header: "Payment Remark", key: "paymentRemark", width: 24 },
+      { header: "Payment Remark", key: "paymentRemark", width: 40 },
       { header: "Status", key: "status", width: 18 },
     ];
 
@@ -933,6 +1054,7 @@ exports.recordUTR = async (req, res) => {
     const payment = await PaymentProcessing.findById(req.params.id)
       .populate("invoiceRequest", "requestId netPayable")
       .populate("vendor", "vendorName")
+      .populate("branch", "name code") // ← ADD: needed for scoping + email body
       .populate("raisedBy", "email name");
 
     if (!payment) return res.status(404).json({ message: "Payment not found" });
@@ -979,23 +1101,71 @@ exports.recordUTR = async (req, res) => {
 
     await payment.save();
 
-    // Notify branch
-    if (payment.raisedBy?.email) {
-      const { sendNotificationEmail } = require("../services/emailService");
-      await sendNotificationEmail(
-        payment.raisedBy.email,
-        `✅ Payment ${payment.status}: ${payment.paymentId}`,
-        `
-          <p>Payment <strong>${payment.paymentId}</strong> UTR recorded.</p>
+    // ── Notify raiser + Branch Partner + Cluster Head ──────────
+    try {
+      const branchId = payment.branch?._id || payment.branch;
+
+      const approvers = await User.find({
+        role: { $in: [ROLES.BRANCH_PARTNER, ROLES.CLUSTER_HEAD] },
+        status: "active",
+        branches: branchId, // only approvers mapped to this payment's branch
+      }).select("email name role");
+
+      // Raiser goes on To:, partner + cluster head on Cc:. De-duped, case-insensitive.
+      const seen = new Set();
+      const recipients = [];
+      for (const raw of [
+        payment.raisedBy?.email,
+        ...approvers.map((u) => u.email),
+      ]) {
+        const email = raw?.trim();
+        if (!email) continue;
+        const key = email.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        recipients.push(email);
+      }
+
+      if (recipients.length) {
+        const [to, ...cc] = recipients;
+        const invoice = payment.invoiceRequest;
+        const paidOn = (
+          payment.paymentDate || payment.utrRecordedAt
+        ).toLocaleDateString("en-GB", {
+          day: "2-digit",
+          month: "short",
+          year: "numeric",
+        });
+        const row = (label, value, color) =>
+          `<tr><td style="padding:6px;color:#666;">${label}</td><td style="padding:6px;font-weight:600;${color ? `color:${color};` : ""}">${value}</td></tr>`;
+
+        await sendNotificationEmail(
+          to,
+          `✅ Payment ${payment.status}: ${payment.paymentId}`,
+          `
+          <p>Payment <strong>${payment.paymentId}</strong> has been processed by the Accounts team and the UTR has been recorded.</p>
           <table style="width:100%;border-collapse:collapse;margin-top:12px;">
-            <tr><td style="padding:6px;color:#666;">UTR Number</td><td style="padding:6px;font-weight:600;color:#16a34a;">${utr}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Amount Paid</td><td style="padding:6px;font-weight:600;">₹${installmentAmount.toLocaleString("en-IN")}</td></tr>
-            <tr><td style="padding:6px;color:#666;">Total Paid</td><td style="padding:6px;font-weight:600;">₹${payment.paidAmount.toLocaleString("en-IN")}</td></tr>
-            ${payment.remainingAmount > 0 ? `<tr><td style="padding:6px;color:#666;">Remaining</td><td style="padding:6px;font-weight:600;color:#d97706;">₹${payment.remainingAmount.toLocaleString("en-IN")}</td></tr>` : ""}
+            ${row("UTR Number", utr, "#16a34a")}
+            ${row("Payment Date", paidOn)}
+            ${row("Invoice", invoice?.requestId || "—")}
+            ${row("Vendor", payment.vendor?.vendorName || "—")}
+            ${row("Branch", payment.branch?.name || "—")}
+            ${row("Amount Paid", `₹${installmentAmount.toLocaleString("en-IN")}`)}
+            ${row("Total Paid", `₹${payment.paidAmount.toLocaleString("en-IN")}`)}
+            ${payment.remainingAmount > 0 ? row("Remaining", `₹${payment.remainingAmount.toLocaleString("en-IN")}`, "#d97706") : ""}
           </table>
-          ${payment.status === "Fully Paid" ? "<p style='color:#16a34a;font-weight:700;margin-top:12px;'>✅ Invoice fully cleared!</p>" : "<p style='color:#d97706;margin-top:12px;'>Remaining balance can be paid in next installment.</p>"}
+          ${
+            payment.status === "Fully Paid"
+              ? "<p style='color:#16a34a;font-weight:700;margin-top:12px;'>✅ Invoice fully cleared!</p>"
+              : "<p style='color:#d97706;margin-top:12px;'>Remaining balance can be paid in the next installment.</p>"
+          }
+          <p style="color:#94a3b8;font-size:12px;margin-top:16px;">This is an automated confirmation — no action is required.</p>
         `,
-      ).catch(console.error);
+          cc.length ? { cc } : {},
+        );
+      }
+    } catch (mailErr) {
+      console.error("UTR notification error:", mailErr.message);
     }
 
     await logAction({
