@@ -7,22 +7,27 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { PAYMENT_WORKFLOW } from "../config/constants";
 import SearchableSelect from "../components/SearchableSelect.jsx";
 
-// Local-date ISO (avoid toISOString() UTC shift for IST users)
-const toISO = (d) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate(),
-  ).padStart(2, "0")}`;
+// Rows per page. All-time data is served page by page, never in one payload.
+const PAGE_SIZE = 20;
 
-const DEFAULT_RANGE = () => {
-  const to = new Date();
-  const from = new Date();
-  from.setDate(to.getDate() - 29); // last 30 days, today inclusive
-  return { from: toISO(from), to: toISO(to) };
-};
+// Bumping the key retires any state saved by an earlier build — notably the
+// old default 30-day date range, which would otherwise silently restore and
+// under-report every count.
+const SESSION_KEY = "paymentListState.v2";
+
+// One-click filters on the Approved Invoices tab. These match on the linked
+// payment record's status, not the invoice status (always "Cluster Head
+// Approved" here).
+const RAISE_QUICK_FILTERS = [
+  { value: "", label: "All", icon: "📋" },
+  { value: "Payment Pending", label: "Pending to Raise", icon: "⏳" },
+  { value: "Partially Paid", label: "Partially Raised", icon: "⚡" },
+  { value: "Payment Rejected", label: "Rejected — Re-raise", icon: "❌" },
+];
 
 // Status options per section
 const STATUS_OPTIONS = {
-  raise: [], // invoices here are always "Cluster Head Approved"
+  raise: RAISE_QUICK_FILTERS.filter((f) => f.value).map((f) => f.value),
   processing: [
     "Payment Raised",
     "Accounts Approved",
@@ -52,7 +57,7 @@ export default function PaymentProcessing() {
   // navigating into a payment and back.
   const savedState = React.useMemo(() => {
     try {
-      return JSON.parse(sessionStorage.getItem("paymentListState")) || {};
+      return JSON.parse(sessionStorage.getItem(SESSION_KEY)) || {};
     } catch {
       return {};
     }
@@ -87,17 +92,30 @@ export default function PaymentProcessing() {
   const [debouncedSearch, setDebouncedSearch] = useState(
     savedState.search || "",
   );
-  const [dateFrom, setDateFrom] = useState(() =>
-    savedState.dateFrom !== undefined
-      ? savedState.dateFrom
-      : DEFAULT_RANGE().from,
-  );
-  const [dateTo, setDateTo] = useState(() =>
-    savedState.dateTo !== undefined ? savedState.dateTo : DEFAULT_RANGE().to,
-  );
-  const [statusFilter, setStatusFilter] = useState(
-    savedState.statusFilter || "",
-  );
+  const [dateFrom, setDateFrom] = useState(savedState.dateFrom || "");
+  const [dateTo, setDateTo] = useState(savedState.dateTo || "");
+  // "Partially Paid" and "Payment Rejected" each belong to two tabs'
+  // vocabularies, so a filter chosen on one tab could be restored on another
+  // and silently narrow the list. Only restore it if it is valid for the tab
+  // actually being restored.
+  const [statusFilter, setStatusFilter] = useState(() => {
+    const saved = savedState.statusFilter || "";
+    const validFor = STATUS_OPTIONS[savedState.tab || "raise"] || [];
+    return validFor.includes(saved) ? saved : "";
+  });
+
+  // Pagination: `total` is the row count for the active tab, `counts` feeds
+  // the tab badges (fetched as count-only requests).
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [counts, setCounts] = useState({
+    raise: 0,
+    processing: 0,
+    processed: 0,
+  });
+  const [statusCounts, setStatusCounts] = useState(null);
+  const [unlinked, setUnlinked] = useState(0);
+  const [noPaymentRecord, setNoPaymentRecord] = useState(0);
   const [utrDate, setUtrDate] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
@@ -109,7 +127,7 @@ export default function PaymentProcessing() {
 
   useEffect(() => {
     sessionStorage.setItem(
-      "paymentListState",
+      SESSION_KEY,
       JSON.stringify({
         tab,
         branchFilter,
@@ -129,13 +147,20 @@ export default function PaymentProcessing() {
   };
 
   const resetFilters = () => {
-    const d = DEFAULT_RANGE();
     setSearch("");
     setBranchFilter("");
     setStatusFilter("");
-    setDateFrom(d.from);
-    setDateTo(d.to);
+    setDateFrom("");
+    setDateTo("");
   };
+
+  // Any change to the result set sends us back to page 1. Without this,
+  // sitting on page 4 and applying a filter that matches 30 rows would
+  // skip past the end and render an empty table.
+  useEffect(() => {
+    setPage(1);
+    setSelectedIds([]);
+  }, [tab, branchFilter, debouncedSearch, dateFrom, dateTo, statusFilter]);
 
   useEffect(() => {
     if (["accounts", "super_admin", "cluster_head"].includes(authUser?.role)) {
@@ -157,46 +182,83 @@ export default function PaymentProcessing() {
       if (dateFrom) base.set("from", dateFrom);
       if (dateTo) base.set("to", dateTo);
 
-      const payParams = new URLSearchParams(base);
-      if (STATUS_OPTIONS.processing.includes(statusFilter))
+      // The active tab gets a full page; the other two fetch a single row
+      // purely to read `total` for their badge.
+      const sized = (key) => {
+        const p = new URLSearchParams(base);
+        p.set("limit", tab === key ? PAGE_SIZE : 1);
+        p.set("page", tab === key ? page : 1);
+        return p;
+      };
+
+      const invParams = sized("raise");
+      if (tab === "raise") {
+        invParams.set("withCounts", "true");
+        if (STATUS_OPTIONS.raise.includes(statusFilter))
+          invParams.set("paymentStatus", statusFilter);
+      }
+
+      const payParams = sized("processing");
+      payParams.set("excludeProcessed", "true");
+      if (
+        tab === "processing" &&
+        STATUS_OPTIONS.processing.includes(statusFilter)
+      )
         payParams.set("status", statusFilter);
 
-      const processedParams = new URLSearchParams(base);
+      const processedParams = sized("processed");
       processedParams.set("processedOnly", "true");
-      processedParams.set("limit", "100");
-      if (STATUS_OPTIONS.processed.includes(statusFilter))
+      if (
+        tab === "processed" &&
+        STATUS_OPTIONS.processed.includes(statusFilter)
+      )
         processedParams.set("status", statusFilter);
 
       const [invRes, payRes, processedRes] = await Promise.all([
-        api.get(`/payments/approved-invoices?${base}`),
+        api.get(`/payments/approved-invoices?${invParams}`),
         api.get(`/payments?${payParams}`),
         api.get(`/payments?${processedParams}`),
       ]);
-      setInvoices(
-        Array.isArray(invRes.data) ? invRes.data : invRes.data.invoices || [],
-      );
-      const allPayments = Array.isArray(payRes.data)
-        ? payRes.data
-        : payRes.data.payments || [];
-      setPayments(
-        allPayments.filter(
-          (p) =>
-            !["Payment Processed", "Partially Paid", "Fully Paid"].includes(
-              p.status,
-            ),
-        ),
-      );
-      setProcessedPayments(
-        Array.isArray(processedRes.data)
-          ? processedRes.data
-          : processedRes.data.payments || [],
-      );
+
+      // Badge shows the unfiltered "All" count, so picking a chip narrows the
+      // table without appearing to change how many approved invoices exist.
+      setCounts({
+        raise: invRes.data.baseTotal ?? invRes.data.total ?? 0,
+        processing: payRes.data.total || 0,
+        processed: processedRes.data.total || 0,
+      });
+      setStatusCounts(invRes.data.statusCounts || null);
+      setUnlinked(invRes.data.unlinked || 0);
+      setNoPaymentRecord(invRes.data.approvedWithoutPaymentRecord || 0);
+
+      // Only the active tab's rows are rendered. Processed statuses are now
+      // excluded server-side via `excludeProcessed`, so no client filtering.
+      if (tab === "raise") {
+        setInvoices(invRes.data.invoices || []);
+        setTotal(invRes.data.total || 0);
+      } else if (tab === "processing") {
+        setPayments(payRes.data.payments || []);
+        setTotal(payRes.data.total || 0);
+      } else {
+        setProcessedPayments(processedRes.data.payments || []);
+        setTotal(processedRes.data.total || 0);
+      }
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, [branchFilter, debouncedSearch, dateFrom, dateTo, statusFilter]);
+  }, [
+    tab,
+    page,
+    branchFilter,
+    debouncedSearch,
+    dateFrom,
+    dateTo,
+    statusFilter,
+  ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   useEffect(() => {
     fetchData();
@@ -358,26 +420,24 @@ export default function PaymentProcessing() {
         <div style={S.tabs}>
           <button
             style={{ ...S.tab, ...(tab === "raise" ? S.tabActive : {}) }}
-            onClick={() => setTab("raise")}
+            onClick={() => handleTabChange("raise")}
           >
             📋 Approved Invoices{" "}
-            {invoices.length > 0 && (
-              <span style={S.badge}>{invoices.length}</span>
-            )}
+            {counts.raise > 0 && <span style={S.badge}>{counts.raise}</span>}
           </button>
           <button
             style={{ ...S.tab, ...(tab === "processing" ? S.tabActive : {}) }}
-            onClick={() => setTab("processing")}
+            onClick={() => handleTabChange("processing")}
           >
-            💳 Payment Requests <span style={S.badge}>{payments.length}</span>
+            💳 Payment Requests <span style={S.badge}>{counts.processing}</span>
           </button>
           <button
             style={{ ...S.tab, ...(tab === "processed" ? S.tabActive : {}) }}
-            onClick={() => setTab("processed")}
+            onClick={() => handleTabChange("processed")}
           >
             ✅ Payment Processed{" "}
-            {processedPayments.length > 0 && (
-              <span style={S.badge}>{processedPayments.length}</span>
+            {counts.processed > 0 && (
+              <span style={S.badge}>{counts.processed}</span>
             )}
           </button>
         </div>
@@ -449,7 +509,7 @@ export default function PaymentProcessing() {
             />
           </div>
 
-          {STATUS_OPTIONS[tab].length > 0 && (
+          {tab !== "raise" && STATUS_OPTIONS[tab].length > 0 && (
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <label
                 style={{ fontSize: 12, fontWeight: 600, color: "#64748b" }}
@@ -480,22 +540,6 @@ export default function PaymentProcessing() {
             </div>
           )}
 
-          <button
-            onClick={resetFilters}
-            style={{
-              padding: "9px 14px",
-              border: "1.5px solid #e2e8f0",
-              borderRadius: 8,
-              background: "#fff",
-              color: "#475569",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            ↺ Last 30 days
-          </button>
-
           {["accounts", "super_admin", "cluster_head"].includes(
             authUser?.role,
           ) && (
@@ -515,12 +559,7 @@ export default function PaymentProcessing() {
             </div>
           )}
           <button
-            onClick={() => {
-              setSearch("");
-              setBranchFilter("");
-              setDateFrom("");
-              setDateTo("");
-            }}
+            onClick={resetFilters}
             style={{
               padding: "9px 14px",
               background: "#f1f5f9",
@@ -531,7 +570,7 @@ export default function PaymentProcessing() {
               color: "#475569",
             }}
           >
-            Reset
+            ↺ Reset
           </button>
         </div>
 
@@ -542,6 +581,52 @@ export default function PaymentProcessing() {
             {/* ── Tab 1: Approved Invoices ──────────────── */}
             {tab === "raise" && (
               <div>
+                <div style={S.chipRow}>
+                  {RAISE_QUICK_FILTERS.map((f) => {
+                    const active = statusFilter === f.value;
+                    const n = f.value ? statusCounts?.[f.value] : counts.raise;
+                    return (
+                      <button
+                        key={f.value || "all"}
+                        onClick={() => setStatusFilter(f.value)}
+                        style={{ ...S.chip, ...(active ? S.chipActive : {}) }}
+                      >
+                        {f.icon} {f.label}
+                        {n != null && (
+                          <span
+                            style={{
+                              ...S.chipCount,
+                              ...(active ? {} : S.chipCountIdle),
+                            }}
+                          >
+                            {n}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {(unlinked > 0 || noPaymentRecord > 0) && (
+                  <div style={S.warnBox}>
+                    {noPaymentRecord > 0 && (
+                      <div>
+                        ⚠️ {noPaymentRecord} fully approved invoice
+                        {noPaymentRecord === 1 ? " has" : "s have"} no payment
+                        record and cannot appear in this list. Counted as
+                        approved elsewhere (e.g. the dashboard), which is why
+                        that figure is higher than {counts.raise}.
+                      </div>
+                    )}
+                    {unlinked > 0 && (
+                      <div style={{ marginTop: noPaymentRecord > 0 ? 6 : 0 }}>
+                        ⚠️ {unlinked} invoice{unlinked === 1 ? "" : "s"} point
+                        at a payment record that no longer exists, so
+                        {unlinked === 1 ? " it appears" : " they appear"} under
+                        All but under no status chip.
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div style={S.infoBox}>
                   ℹ️ These invoices are fully approved by Cluster Head and ready
                   for payment. The Accounts team can raise and process the
@@ -759,7 +844,7 @@ export default function PaymentProcessing() {
                     <span style={{ fontSize: 13, color: "#475569" }}>
                       {selectedIds.length > 0
                         ? `${selectedIds.length} selected`
-                        : `${eligiblePayments.length} eligible for Excel`}
+                        : `${eligiblePayments.length} eligible for Excel on this page`}
                     </span>
                     {selectedIds.length > 0 && (
                       <button
@@ -1056,6 +1141,30 @@ export default function PaymentProcessing() {
                 )}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* ── Pagination (shared by all three tabs) ────────── */}
+        {!loading && total > 0 && (
+          <div style={S.pagination}>
+            <button
+              style={{ ...S.pageBtn, opacity: page === 1 ? 0.4 : 1 }}
+              disabled={page === 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              ← Prev
+            </button>
+            <span style={S.pageInfo}>
+              Page {page} of {totalPages} · {total.toLocaleString("en-IN")}{" "}
+              results
+            </span>
+            <button
+              style={{ ...S.pageBtn, opacity: page >= totalPages ? 0.4 : 1 }}
+              disabled={page >= totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next →
+            </button>
           </div>
         )}
 
@@ -1774,6 +1883,62 @@ const S = {
     cursor: "pointer",
   },
   emptyCell: { padding: 40, textAlign: "center", color: "#94a3b8" },
+  chipRow: { display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" },
+  chip: {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    padding: "7px 14px",
+    background: "#fff",
+    border: `1.5px solid ${C.border}`,
+    borderRadius: 20,
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#475569",
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  chipActive: {
+    background: "#eff6ff",
+    borderColor: C.accent,
+    color: C.accent,
+  },
+  chipCount: {
+    background: C.accent,
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: 700,
+    padding: "1px 7px",
+    borderRadius: 20,
+  },
+  chipCountIdle: { background: "#e2e8f0", color: "#475569" },
+  warnBox: {
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    color: "#92400e",
+    borderRadius: 10,
+    padding: "10px 14px",
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  pagination: {
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 16,
+    marginTop: 20,
+  },
+  pageBtn: {
+    padding: "8px 16px",
+    border: `1px solid ${C.border}`,
+    borderRadius: 8,
+    background: "#fff",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 600,
+    color: C.primary,
+  },
+  pageInfo: { fontSize: 13, color: "#666" },
   overlay: {
     position: "fixed",
     inset: 0,
