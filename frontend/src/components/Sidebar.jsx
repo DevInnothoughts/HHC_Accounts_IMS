@@ -50,9 +50,15 @@ const navItems = [
   },
   {
     label: "Reports",
-    path: "/reports",
+    path: "/reports/primary",
     icon: "📊",
-    roles: ["accounts", "super_admin"],
+    roles: ["accounts", "super_admin", "director", "cluster_head"],
+  },
+  {
+    label: "Volume & Value",
+    path: "/reports",
+    icon: "📈",
+    roles: ["accounts", "super_admin", "cluster_head", "director"],
   },
   {
     label: "Audit Logs",
@@ -76,8 +82,22 @@ export default function Sidebar() {
     (item) => item.roles.includes("all") || item.roles.includes(user?.role),
   );
 
+  // Longest matching path wins. A plain startsWith lights up both
+  // "/reports" and "/reports/primary" when you're on the latter.
+  const activePath = visible
+    .map((i) => i.path)
+    .filter(
+      (p) => location.pathname === p || location.pathname.startsWith(p + "/"),
+    )
+    .sort((a, b) => b.length - a.length)[0];
+
   return (
     <aside style={styles.sidebar}>
+      {/* Inline styles can't target ::-webkit-scrollbar, so the WebKit
+          rule has to come from a real stylesheet. */}
+      <style>{`
+        .hhc-sidebar-nav::-webkit-scrollbar { width: 0; height: 0; }
+      `}</style>
       <div style={styles.brand}>
         <div style={styles.logo}>HHC</div>
         <div>
@@ -86,9 +106,9 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <nav style={styles.nav}>
+      <nav className="hhc-sidebar-nav" style={styles.nav}>
         {visible.map((item) => {
-          const active = location.pathname.startsWith(item.path);
+          const active = item.path === activePath;
           return (
             <Link
               key={item.path}
@@ -135,6 +155,7 @@ const styles = {
     gap: 12,
     padding: "20px 18px 16px",
     borderBottom: "1px solid rgba(255,255,255,0.1)",
+    flexShrink: 0,
   },
   logo: {
     width: 38,
@@ -157,6 +178,10 @@ const styles = {
     display: "flex",
     flexDirection: "column",
     gap: 2,
+    minHeight: 0,
+    overflowY: "auto",
+    scrollbarWidth: "none", // Firefox
+    msOverflowStyle: "none", // legacy Edge / IE
   },
   navItem: {
     display: "flex",
@@ -178,6 +203,7 @@ const styles = {
   footer: {
     padding: "12px 10px 16px",
     borderTop: "1px solid rgba(255,255,255,0.1)",
+    flexShrink: 0,
   },
   userInfo: {
     display: "flex",

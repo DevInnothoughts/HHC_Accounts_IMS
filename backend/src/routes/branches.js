@@ -8,6 +8,11 @@ const { ROLES } = require("../config/constants");
 
 router.get("/", ctrl.getBranches);
 router.post("/", roleGuard(ROLES.SUPER_ADMIN), ctrl.createBranch);
+router.put(
+  "/:id/bank-accounts",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.replaceBankAccounts,
+);
 router.put("/:id", roleGuard(ROLES.SUPER_ADMIN), ctrl.updateBranch);
 router.patch(
   "/:id/toggle-status",

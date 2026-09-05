@@ -22,6 +22,7 @@ import ExpenseCategories from "./pages/ExpenseCategories.jsx";
 import AuditLogs from "./pages/AuditLogs.jsx";
 import BudgetManagement from "./pages/BudgetManagement.jsx";
 import SLADashboard from "./pages/SLADashboard.jsx";
+import PrimaryReports from "./pages/PrimaryReports.jsx";
 
 const ProtectedRoute = ({ children, roles }) => {
   const { user } = useAuth();
@@ -147,8 +148,20 @@ export default function App() {
           <Route
             path="/reports"
             element={
-              <ProtectedRoute roles={["accounts", "super_admin"]}>
+              <ProtectedRoute
+                roles={["accounts", "super_admin", "cluster_head", "director"]}
+              >
                 <Reports />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/reports/primary"
+            element={
+              <ProtectedRoute
+                roles={["accounts", "super_admin", "director", "cluster_head"]}
+              >
+                <PrimaryReports />
               </ProtectedRoute>
             }
           />

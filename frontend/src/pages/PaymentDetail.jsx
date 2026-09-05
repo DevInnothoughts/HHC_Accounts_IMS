@@ -130,6 +130,37 @@ export default function PaymentDetail() {
     }
   };
 
+  const handleFedOneExcel = async () => {
+    try {
+      const res = await api.post(
+        `/payments/${id}/fedone-excel`,
+        {},
+        { responseType: "blob" },
+      );
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `FedOne_${payment.paymentId}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      fetchPayment();
+    } catch (err) {
+      const data = err.response?.data;
+      let msg = "FedOne Excel generation failed";
+      if (data instanceof Blob) {
+        try {
+          const p = JSON.parse(await data.text());
+          msg = p.errors?.length
+            ? `${p.message}: ${p.errors.join("; ")}`
+            : p.message || msg;
+        } catch {}
+      }
+      setError(msg);
+    }
+  };
+
   if (loading)
     return (
       <div style={S.layout}>
@@ -195,6 +226,14 @@ export default function PaymentDetail() {
             {canExcel && (
               <button style={S.excelBtn} onClick={handleExcel}>
                 📊 Generate Excel
+              </button>
+            )}
+            {canExcel && (
+              <button
+                style={{ ...S.excelBtn, background: "#0f766e" }}
+                onClick={handleFedOneExcel}
+              >
+                🏦 FedOne Excel
               </button>
             )}
             {canUTR && (

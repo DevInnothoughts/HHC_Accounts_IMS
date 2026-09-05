@@ -216,10 +216,12 @@ exports.submitInvoice = async (req, res) => {
 exports.approveInvoice = async (req, res) => {
   try {
     const { remarks, tdsPercentage } = req.body;
+
     const invoice = await InvoiceRequest.findById(req.params.id).populate(
       "branch vendor createdBy",
     );
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    const previousStatus = invoice.status;
 
     // ✅ Handle partner-skipped invoices — accounts can act on Submitted directly
     // ✅ Handle partner-skipped invoices — accounts can act on Submitted directly
@@ -311,7 +313,7 @@ exports.approveInvoice = async (req, res) => {
 
       // Notify account user that invoice is fully approved
       // AFTER
-      if (invoice.createdBy?.email) {
+      if (invoice.createdBy?.email && invoice.createdBy?.status === "active") {
         await sendNotificationEmail(
           invoice.createdBy.email,
           `✅ Invoice Approved: ${invoice.requestId}`,
@@ -405,7 +407,10 @@ exports.approveInvoice = async (req, res) => {
       userId: req.user._id,
       action: "APPROVE_INVOICE",
       module: "Invoice",
-      targetId: invoice._id,
+      targetDoc: invoice, // label, branch, amount derived
+      statusFrom: previousStatus, // capture before invoice.status is set
+      statusTo: invoice.status,
+      reason: req.body.remarks,
       req,
     });
     res.json(invoice);
@@ -423,9 +428,11 @@ exports.rejectInvoice = async (req, res) => {
 
     const invoice = await InvoiceRequest.findById(req.params.id).populate(
       "createdBy",
-      "name email",
+      "name email status",
     );
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
+    const previousStatus = invoice.status;
 
     // ✅ Allow accounts to reject partner-skipped invoices at Submitted stage
     const partnerSkipped =
@@ -483,7 +490,10 @@ exports.rejectInvoice = async (req, res) => {
       userId: req.user._id,
       action: "REJECT_INVOICE",
       module: "Invoice",
-      targetId: invoice._id,
+      targetDoc: invoice,
+      statusFrom: previousStatus,
+      statusTo: "Rejected",
+      reason: reason.trim(),
       req,
     });
     res.json(invoice);

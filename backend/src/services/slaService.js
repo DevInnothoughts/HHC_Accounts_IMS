@@ -5,6 +5,10 @@ const User = require("../models/User");
 const { sendNotificationEmail } = require("./emailService");
 const { ROLES } = require("../config/constants");
 
+// Roles tracked for escalation but never emailed. Leadership monitors breaches
+// on the SLA dashboard rather than receiving one mail per breached invoice.
+const NO_SLA_EMAIL_ROLES = [ROLES.SUPER_ADMIN, ROLES.DIRECTOR];
+
 // ✅ New flow: partner first, then accounts, then cluster_head
 // ✅ New flow: partner → accounts → cluster_head
 const STATUS_TO_STAGE = {
@@ -140,10 +144,25 @@ const handleSLABreach = async (tracking, invoice) => {
       status: "active",
       branches: invoice.branch._id || invoice.branch,
     });
+    // Escalation is still recorded on the tracking row above — this only
+    // controls who gets an email.
     const notifyList = [
       ...approvers,
       ...(escalationUser ? [escalationUser] : []),
-    ];
+    ]
+      .filter((u) => u?.email && !NO_SLA_EMAIL_ROLES.includes(u.role))
+      // escalateTo can equal the stage's acting role, which would double-send
+      .filter(
+        (u, i, arr) =>
+          arr.findIndex((x) => x._id.toString() === u._id.toString()) === i,
+      );
+
+    if (!notifyList.length) {
+      console.warn(
+        `[SLA] Breach on ${invoice.requestId} (${tracking.stage}) — no eligible recipients`,
+      );
+      return;
+    }
 
     for (const u of notifyList) {
       await sendNotificationEmail(

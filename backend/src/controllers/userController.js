@@ -1,6 +1,7 @@
 // ============================================================
 // BACKEND: controllers/userController.js
 // ============================================================
+const mongoose = require("mongoose");
 const User = require("../models/User");
 const Branch = require("../models/Branch");
 const { logAction } = require("../services/auditService");
@@ -8,10 +9,19 @@ const { ROLES } = require("../config/constants");
 
 exports.getUsers = async (req, res) => {
   try {
-    const { role, status, search, page = 1, limit = 20 } = req.query;
+    const { role, status, search, branch, page = 1, limit = 20 } = req.query;
     const query = {};
     if (role) query.role = role;
     if (status) query.status = status;
+
+    // `branches` is an array on User, so an equality match on the field
+    // means "this branch is one of the user's assignments".
+    if (branch) {
+      if (!mongoose.isValidObjectId(branch))
+        return res.status(400).json({ message: "Invalid branch" });
+      query.branches = branch;
+    }
+
     if (search)
       query.$or = [
         { name: { $regex: search, $options: "i" } },

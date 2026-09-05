@@ -48,6 +48,34 @@ const STATUS_STYLES = {
   "Payment Rejected": { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
+const FEDONE_BTN = {
+  padding: "6px 10px",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#fff",
+  background: "#0f766e",
+  border: "none",
+  borderRadius: 6,
+  cursor: "pointer",
+};
+
+// With responseType:"blob" an error body arrives as a Blob, so
+// err.response.data.message is undefined. Read it back as text.
+const readBlobError = async (err, fallback) => {
+  const data = err.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const parsed = JSON.parse(await data.text());
+      return parsed.errors?.length
+        ? `${parsed.message}: ${parsed.errors.join("; ")}`
+        : parsed.message || fallback;
+    } catch {
+      return fallback;
+    }
+  }
+  return data?.message || err.message || fallback;
+};
+
 export default function PaymentProcessing() {
   const { user } = useNavigate();
   const navigate = useNavigate();
@@ -119,6 +147,7 @@ export default function PaymentProcessing() {
   const [utrDate, setUtrDate] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
+  const [bulkFormat, setBulkFormat] = useState("standard"); // "standard" | "fedone"
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
@@ -327,6 +356,27 @@ export default function PaymentProcessing() {
     }
   };
 
+  const handleGenerateFedOneExcel = async (paymentId, label) => {
+    try {
+      const res = await api.post(
+        `/payments/${paymentId}/fedone-excel`,
+        {},
+        { responseType: "blob" },
+      );
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `FedOne_${label || paymentId}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      fetchData();
+    } catch (err) {
+      setError(await readBlobError(err, "FedOne Excel generation failed"));
+    }
+  };
+
   const isBranch = authUser?.role === "branch_user";
   const isAccounts = authUser?.role === "accounts";
 
@@ -391,6 +441,33 @@ export default function PaymentProcessing() {
       fetchData();
     } catch (err) {
       setError(err.response?.data?.message || "Bulk Excel generation failed");
+    } finally {
+      setBulkGenerating(false);
+    }
+  };
+
+  const handleBulkFedOneExcel = async () => {
+    if (selectedIds.length === 0) return;
+    setBulkGenerating(true);
+    try {
+      const res = await api.post(
+        "/payments/bulk-fedone-excel",
+        { paymentIds: selectedIds },
+        { responseType: "blob" },
+      );
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      const date = new Date().toISOString().slice(0, 10);
+      link.setAttribute("download", `FedOne_Payments_${date}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      setSelectedIds([]);
+      fetchData();
+    } catch (err) {
+      setError(await readBlobError(err, "FedOne Excel generation failed"));
     } finally {
       setBulkGenerating(false);
     }
@@ -866,13 +943,38 @@ export default function PaymentProcessing() {
                           : "pointer",
                     }}
                     disabled={selectedIds.length === 0 || bulkGenerating}
-                    onClick={() =>
-                      selectedIds.length > 0 && setShowBulkConfirm(true)
-                    }
+                    onClick={() => {
+                      if (selectedIds.length === 0) return;
+                      setBulkFormat("standard");
+                      setShowBulkConfirm(true);
+                    }}
                   >
                     {bulkGenerating
                       ? "⏳ Generating..."
                       : `📊 Generate Excel (${selectedIds.length})`}
+                  </button>
+                  <button
+                    style={{
+                      ...S.bulkExcelBtn,
+                      background: "#0f766e",
+                      marginLeft: 8,
+                      opacity:
+                        selectedIds.length === 0 || bulkGenerating ? 0.5 : 1,
+                      cursor:
+                        selectedIds.length === 0 || bulkGenerating
+                          ? "not-allowed"
+                          : "pointer",
+                    }}
+                    disabled={selectedIds.length === 0 || bulkGenerating}
+                    onClick={() => {
+                      if (selectedIds.length === 0) return;
+                      setBulkFormat("fedone");
+                      setShowBulkConfirm(true);
+                    }}
+                  >
+                    {bulkGenerating
+                      ? "⏳ Generating..."
+                      : `🏦 FedOne Excel (${selectedIds.length})`}
                   </button>
                 </div>
 
@@ -1018,10 +1120,16 @@ export default function PaymentProcessing() {
                                 )}
                                 {canExcel && (
                                   <button
-                                    style={S.excelBtn}
-                                    onClick={() => handleGenerateExcel(pay._id)}
+                                    style={FEDONE_BTN}
+                                    title="Federal Bank upload format"
+                                    onClick={() =>
+                                      handleGenerateFedOneExcel(
+                                        pay._id,
+                                        pay.paymentId,
+                                      )
+                                    }
                                   >
-                                    📊 Excel
+                                    🏦 FedOne
                                   </button>
                                 )}
                                 {pay.status === "Excel Generated" &&
@@ -1437,7 +1545,11 @@ export default function PaymentProcessing() {
           return (
             <div style={S.overlay}>
               <div style={S.modal}>
-                <h3 style={S.modalTitle}>📊 Confirm Bulk Excel Generation</h3>
+                <h3 style={S.modalTitle}>
+                  {bulkFormat === "fedone"
+                    ? "🏦 Confirm FedOne Bank File"
+                    : "📊 Confirm Bulk Excel Generation"}
+                </h3>
                 <p style={{ fontSize: 13, color: "#475569", marginBottom: 16 }}>
                   Please review the selected payments before downloading.
                 </p>
@@ -1582,12 +1694,16 @@ export default function PaymentProcessing() {
                     disabled={bulkGenerating}
                     onClick={async () => {
                       setShowBulkConfirm(false);
-                      await handleBulkExcel();
+                      if (bulkFormat === "fedone")
+                        await handleBulkFedOneExcel();
+                      else await handleBulkExcel();
                     }}
                   >
                     {bulkGenerating
                       ? "⏳ Generating..."
-                      : "📥 Confirm & Download Excel"}
+                      : bulkFormat === "fedone"
+                        ? "🏦 Confirm & Download FedOne File"
+                        : "📥 Confirm & Download Excel"}
                   </button>
                 </div>
               </div>

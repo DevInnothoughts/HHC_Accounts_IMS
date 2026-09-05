@@ -6,6 +6,40 @@ import React from "react";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 
+import { useAuth } from "../context/AuthContext.jsx";
+
+const INDIAN_BANKS = [
+  "Federal Bank",
+  "HDFC Bank",
+  "Kotak Mahindra Bank",
+  "State Bank of India",
+  "ICICI Bank",
+  "Axis Bank",
+  "Punjab National Bank",
+  "Bank of Baroda",
+  "Canara Bank",
+  "Union Bank of India",
+  "IndusInd Bank",
+  "IDFC FIRST Bank",
+  "Yes Bank",
+  "Bank of India",
+  "Central Bank of India",
+  "Indian Bank",
+  "RBL Bank",
+  "Other",
+];
+
+const BLANK_ACCOUNT = {
+  label: "",
+  bankName: "Federal Bank",
+  accountHolderName: "",
+  accountNumber: "",
+  ifscCode: "",
+  rtgsThreshold: 200000,
+  isDefault: false,
+  status: "active",
+};
+
 const INIT_BRANCH = {
   name: "",
   code: "",
@@ -17,6 +51,12 @@ const INIT_BRANCH = {
 };
 
 export default function BranchManagement() {
+  const { user } = useAuth();
+  const isSuperAdmin = user?.role === "super_admin";
+
+  const [accounts, setAccounts] = useState([]);
+  const [accountErrors, setAccountErrors] = useState([]);
+  const [savingAccounts, setSavingAccounts] = useState(false);
   const [branches, setBranches] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -78,6 +118,45 @@ export default function BranchManagement() {
     if (errors[f]) setErrors((er) => ({ ...er, [f]: "" }));
   };
 
+  const setAccount = (idx, field, value) =>
+    setAccounts((list) =>
+      list.map((a, i) => (i === idx ? { ...a, [field]: value } : a)),
+    );
+
+  const addAccount = () =>
+    setAccounts((list) => [
+      ...list,
+      { ...BLANK_ACCOUNT, isDefault: list.length === 0 },
+    ]);
+
+  const removeAccount = (idx) =>
+    setAccounts((list) => list.filter((_, i) => i !== idx));
+
+  // Only one default, and only among active accounts.
+  const makeDefault = (idx) =>
+    setAccounts((list) => list.map((a, i) => ({ ...a, isDefault: i === idx })));
+
+  const validateAccounts = () => {
+    const errs = [];
+    accounts.forEach((a, i) => {
+      const n = i + 1;
+      if (!a.bankName?.trim()) errs.push(`Account ${n}: select a bank`);
+      if (!/^[0-9]{6,20}$/.test(String(a.accountNumber || "").trim()))
+        errs.push(`Account ${n}: account number must be 6–20 digits`);
+      if (
+        !/^[A-Z]{4}0[A-Z0-9]{6}$/.test(String(a.ifscCode || "").toUpperCase())
+      )
+        errs.push(`Account ${n}: invalid IFSC (e.g. FDRL0001234)`);
+      if (a.rtgsThreshold !== "" && Number(a.rtgsThreshold) < 0)
+        errs.push(`Account ${n}: RTGS threshold cannot be negative`);
+    });
+    const active = accounts.filter((a) => a.status !== "inactive");
+    if (active.length > 0 && !active.some((a) => a.isDefault))
+      errs.push("Mark one active account as the default");
+    setAccountErrors(errs);
+    return errs.length === 0;
+  };
+
   const validate = () => {
     const e = {};
     if (!form.name.trim()) e.name = "Branch name required";
@@ -88,27 +167,53 @@ export default function BranchManagement() {
   };
 
   const handleSave = async () => {
+    if (!validateAccounts()) return;
+
+    // Accounts users only manage bank accounts on an existing branch.
+    if (!isSuperAdmin) {
+      setSavingAccounts(true);
+      try {
+        await api.put(`/branches/${form._id}/bank-accounts`, {
+          bankAccounts: accounts,
+        });
+        setSuccess("Bank accounts updated!");
+        setModal(null);
+        setForm(INIT_BRANCH);
+        fetchBranches();
+        setTimeout(() => setSuccess(""), 3000);
+      } catch (err) {
+        const data = err.response?.data;
+        setAccountErrors(data?.errors || [data?.message || "Save failed"]);
+      } finally {
+        setSavingAccounts(false);
+      }
+      return;
+    }
+
     if (!validate()) return;
     setSaving(true);
     try {
-      const payload = {
-        ...form,
-        // ...(form.clusterHead === "" && { clusterHead: null }),
-        //...(form.partner === "" && { partner: null }),
-      };
       if (modal === "create") {
-        await api.post("/branches", payload);
+        // Bank accounts ride along with the new branch in one request.
+        await api.post("/branches", { ...form, bankAccounts: accounts });
         setSuccess("Branch created!");
       } else {
-        await api.put(`/branches/${form._id}`, payload);
+        // updateBranch ignores bankAccounts by design — they go separately.
+        await api.put(`/branches/${form._id}`, form);
+        await api.put(`/branches/${form._id}/bank-accounts`, {
+          bankAccounts: accounts,
+        });
         setSuccess("Branch updated!");
       }
       setModal(null);
       setForm(INIT_BRANCH);
+      setAccounts([]);
       fetchBranches();
       setTimeout(() => setSuccess(""), 3000);
     } catch (err) {
-      setErrors({ submit: err.response?.data?.message || "Save failed" });
+      const data = err.response?.data;
+      if (data?.errors?.length) setAccountErrors(data.errors);
+      else setErrors({ submit: data?.message || "Save failed" });
     } finally {
       setSaving(false);
     }
@@ -131,6 +236,8 @@ export default function BranchManagement() {
       monthlyBudget: b.monthlyBudget || "",
     });
     setErrors({});
+    setAccounts(b.bankAccounts?.map((a) => ({ ...a })) || []);
+    setAccountErrors([]);
     setModal("edit");
   };
 
@@ -146,16 +253,20 @@ export default function BranchManagement() {
             <h1 style={S.title}>Branch Management</h1>
             <p style={S.sub}>{total} branches registered</p>
           </div>
-          <button
-            style={S.createBtn}
-            onClick={() => {
-              setForm(INIT_BRANCH);
-              setErrors({});
-              setModal("create");
-            }}
-          >
-            + Add Branch
-          </button>
+          {isSuperAdmin && (
+            <button
+              style={S.createBtn}
+              onClick={() => {
+                setForm(INIT_BRANCH);
+                setErrors({});
+                setAccounts([]);
+                setAccountErrors([]);
+                setModal("create");
+              }}
+            >
+              + Add Branch
+            </button>
+          )}
         </div>
 
         {success && <div style={S.success}>{success}</div>}
@@ -249,15 +360,17 @@ export default function BranchManagement() {
                   <button style={S.cardActionBtn} onClick={() => openEdit(b)}>
                     ✏️ Edit
                   </button>
-                  <button
-                    style={{
-                      ...S.cardActionBtn,
-                      color: b.status === "active" ? "#dc2626" : "#16a34a",
-                    }}
-                    onClick={() => handleToggle(b._id)}
-                  >
-                    {b.status === "active" ? "⊘ Deactivate" : "✓ Activate"}
-                  </button>
+                  {isSuperAdmin && (
+                    <button
+                      style={{
+                        ...S.cardActionBtn,
+                        color: b.status === "active" ? "#dc2626" : "#16a34a",
+                      }}
+                      onClick={() => handleToggle(b._id)}
+                    >
+                      {b.status === "active" ? "⊘ Deactivate" : "✓ Activate"}
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -309,6 +422,7 @@ export default function BranchManagement() {
                     value={form.name}
                     onChange={set("name")}
                     placeholder="e.g. Pune Main Branch"
+                    disabled={!isSuperAdmin}
                   />
                 </MField>
                 <MField label="Branch Code *" error={errors.code}>
@@ -327,7 +441,7 @@ export default function BranchManagement() {
                     }
                     placeholder="e.g. PNQ01"
                     maxLength={10}
-                    disabled={modal === "edit"}
+                    disabled={modal === "edit" || !isSuperAdmin}
                   />
                 </MField>
                 <MField label="Location *" error={errors.location} fullWidth>
@@ -339,6 +453,7 @@ export default function BranchManagement() {
                     value={form.location}
                     onChange={set("location")}
                     placeholder="City, State"
+                    disabled={!isSuperAdmin}
                   />
                 </MField>
                 {/* <MField label="Cluster Head">
@@ -405,6 +520,175 @@ export default function BranchManagement() {
                 </MField>
               </div>
 
+              {/* ── Bank Accounts (debit side of payment files) ──── */}
+              <div style={S.bankSection}>
+                <div style={S.bankHeader}>
+                  <div>
+                    <h4 style={S.bankTitle}>🏦 Bank Accounts</h4>
+                    <p style={S.bankSub}>
+                      Used as the debit account on FedOne bank files. The
+                      default is picked automatically unless another is chosen.
+                    </p>
+                  </div>
+                  <button style={S.addAccountBtn} onClick={addAccount}>
+                    + Add Account
+                  </button>
+                </div>
+
+                {accountErrors.length > 0 && (
+                  <div style={S.errorBox}>
+                    {accountErrors.map((e, i) => (
+                      <div key={i}>• {e}</div>
+                    ))}
+                  </div>
+                )}
+
+                {accounts.length === 0 && (
+                  <div style={S.bankEmpty}>
+                    No bank account yet. FedOne exports for this branch will
+                    fail until one is added.
+                  </div>
+                )}
+
+                {accounts.map((a, idx) => (
+                  <div
+                    key={a._id || idx}
+                    style={{
+                      ...S.accountCard,
+                      ...(a.status === "inactive" ? { opacity: 0.6 } : {}),
+                      ...(a.isDefault ? { borderColor: "#16a34a" } : {}),
+                    }}
+                  >
+                    <div style={S.accountCardTop}>
+                      <label style={S.defaultToggle}>
+                        <input
+                          type="radio"
+                          name="defaultAccount"
+                          checked={Boolean(a.isDefault)}
+                          disabled={a.status === "inactive"}
+                          onChange={() => makeDefault(idx)}
+                        />
+                        <span>{a.isDefault ? "Default" : "Set default"}</span>
+                      </label>
+                      <button
+                        style={S.removeAccountBtn}
+                        onClick={() => removeAccount(idx)}
+                      >
+                        ✕ Remove
+                      </button>
+                    </div>
+
+                    <div style={S.accountGrid}>
+                      <MField label="Bank *">
+                        <select
+                          style={S.input}
+                          value={
+                            INDIAN_BANKS.includes(a.bankName)
+                              ? a.bankName
+                              : "Other"
+                          }
+                          onChange={(e) =>
+                            setAccount(
+                              idx,
+                              "bankName",
+                              e.target.value === "Other" ? "" : e.target.value,
+                            )
+                          }
+                        >
+                          {INDIAN_BANKS.map((b) => (
+                            <option key={b} value={b}>
+                              {b}
+                            </option>
+                          ))}
+                        </select>
+                      </MField>
+
+                      {!INDIAN_BANKS.includes(a.bankName) && (
+                        <MField label="Bank Name *">
+                          <input
+                            style={S.input}
+                            value={a.bankName}
+                            onChange={(e) =>
+                              setAccount(idx, "bankName", e.target.value)
+                            }
+                            placeholder="Enter bank name"
+                          />
+                        </MField>
+                      )}
+
+                      <MField label="Account Number *">
+                        <input
+                          style={S.input}
+                          value={a.accountNumber}
+                          onChange={(e) =>
+                            setAccount(
+                              idx,
+                              "accountNumber",
+                              e.target.value.replace(/\D/g, ""),
+                            )
+                          }
+                          placeholder="6–20 digits"
+                          maxLength={20}
+                        />
+                      </MField>
+
+                      <MField label="IFSC Code *">
+                        <input
+                          style={{ ...S.input, textTransform: "uppercase" }}
+                          value={a.ifscCode}
+                          onChange={(e) =>
+                            setAccount(
+                              idx,
+                              "ifscCode",
+                              e.target.value.toUpperCase(),
+                            )
+                          }
+                          placeholder="e.g. FDRL0001234"
+                          maxLength={11}
+                        />
+                      </MField>
+
+                      <MField label="RTGS Threshold (₹)">
+                        <input
+                          style={S.input}
+                          type="number"
+                          min="0"
+                          value={a.rtgsThreshold}
+                          onChange={(e) =>
+                            setAccount(idx, "rtgsThreshold", e.target.value)
+                          }
+                          placeholder="200000"
+                        />
+                      </MField>
+
+                      <MField label="Label">
+                        <input
+                          style={S.input}
+                          value={a.label}
+                          onChange={(e) =>
+                            setAccount(idx, "label", e.target.value)
+                          }
+                          placeholder="e.g. Operations A/c"
+                        />
+                      </MField>
+
+                      <MField label="Status">
+                        <select
+                          style={S.input}
+                          value={a.status}
+                          onChange={(e) =>
+                            setAccount(idx, "status", e.target.value)
+                          }
+                        >
+                          <option value="active">Active</option>
+                          <option value="inactive">Inactive</option>
+                        </select>
+                      </MField>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
               <div style={S.modalBtns}>
                 <button style={S.cancelBtn} onClick={() => setModal(null)}>
                   Cancel
@@ -414,11 +698,13 @@ export default function BranchManagement() {
                   onClick={handleSave}
                   disabled={saving}
                 >
-                  {saving
+                  {saving || savingAccounts
                     ? "Saving..."
-                    : modal === "create"
-                      ? "Create Branch"
-                      : "Update Branch"}
+                    : !isSuperAdmin
+                      ? "Save Bank Accounts"
+                      : modal === "create"
+                        ? "Create Branch"
+                        : "Update Branch"}
                 </button>
               </div>
             </div>
@@ -668,5 +954,73 @@ const S = {
     cursor: "pointer",
     fontWeight: 700,
     fontSize: 14,
+  },
+  bankSection: {
+    borderTop: `1px solid ${C.border}`,
+    paddingTop: 18,
+    marginBottom: 20,
+  },
+  bankHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    marginBottom: 12,
+    gap: 12,
+  },
+  bankTitle: { fontSize: 15, fontWeight: 700, color: C.primary, margin: 0 },
+  bankSub: { fontSize: 12, color: "#64748b", margin: "4px 0 0" },
+  addAccountBtn: {
+    padding: "7px 12px",
+    border: `1px solid ${C.border}`,
+    borderRadius: 8,
+    background: "#fff",
+    color: "#0f766e",
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
+  bankEmpty: {
+    padding: "14px 16px",
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    borderRadius: 8,
+    fontSize: 13,
+    color: "#92400e",
+  },
+  accountCard: {
+    border: `1.5px solid ${C.border}`,
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 12,
+    background: "#f8fafc",
+  },
+  accountCardTop: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  defaultToggle: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#16a34a",
+    cursor: "pointer",
+  },
+  removeAccountBtn: {
+    background: "none",
+    border: "none",
+    color: "#dc2626",
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+  },
+  accountGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
   },
 };

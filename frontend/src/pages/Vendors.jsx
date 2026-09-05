@@ -64,6 +64,8 @@ export default function Vendors() {
   const [rejectModal, setRejectModal] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
   const [approveModal, setApproveModal] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
 
   useEffect(() => {
     if (["accounts", "super_admin", "cluster_head"].includes(user?.role)) {
@@ -85,6 +87,7 @@ export default function Vendors() {
       "vendorListState",
       JSON.stringify({ filters, search }),
     );
+    setExportError("");
   }, [filters, search]);
 
   const canManage = ["branch_user", "accounts", "super_admin"].includes(
@@ -93,12 +96,9 @@ export default function Vendors() {
 
   const canChangeStatus = ["accounts", "super_admin"].includes(user?.role);
 
-  const fetchVendors = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page,
-        limit: 15,
+  const buildParams = useCallback(
+    (extra = {}) =>
+      new URLSearchParams({
         ...(search && { search }),
         ...(filters.status && { status: filters.status }),
         ...(filters.category && { category: filters.category }),
@@ -106,8 +106,17 @@ export default function Vendors() {
         ...(filters.approvalStatus && {
           approvalStatus: filters.approvalStatus,
         }),
-      });
-      const { data } = await api.get(`/vendors?${params}`);
+        ...extra,
+      }),
+    [search, filters],
+  );
+
+  const fetchVendors = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data } = await api.get(
+        `/vendors?${buildParams({ page, limit: 15 })}`,
+      );
       setVendors(data.vendors);
       setTotal(data.total);
     } catch (err) {
@@ -115,7 +124,44 @@ export default function Vendors() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, filters]);
+  }, [page, buildParams]);
+
+  const handleExport = async () => {
+    setExporting(true);
+    setExportError("");
+    try {
+      const res = await api.get(`/vendors/export/excel?${buildParams()}`, {
+        responseType: "blob",
+      });
+      const url = window.URL.createObjectURL(
+        new Blob([res.data], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute(
+        "download",
+        `Vendors_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      // responseType:"blob" means the error body is a Blob, not JSON
+      let msg = `Export failed (${err.response?.status ?? "network error"})`;
+      try {
+        const raw = await err.response.data.text();
+        msg = JSON.parse(raw).message || raw.slice(0, 120);
+      } catch {
+        /* non-JSON body — keep the status-code message */
+      }
+      setExportError(msg);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   useEffect(() => {
     fetchVendors();
@@ -155,15 +201,45 @@ export default function Vendors() {
             <h1 style={S.title}>Vendor Management</h1>
             <p style={S.sub}>{total} vendors registered</p>
           </div>
-          {canManage && (
+          <div style={{ display: "flex", gap: 10 }}>
             <button
-              style={S.createBtn}
-              onClick={() => navigate("/vendors/new")}
+              style={{
+                ...S.exportBtn,
+                opacity: exporting || loading || total === 0 ? 0.55 : 1,
+                cursor: exporting || total === 0 ? "not-allowed" : "pointer",
+              }}
+              disabled={exporting || loading || total === 0}
+              onClick={handleExport}
+              title="Downloads the vendors matching your current filters"
             >
-              + Add Vendor
+              {exporting ? "⏳ Preparing..." : "📊 Download Excel"}
             </button>
-          )}
+            {canManage && (
+              <button
+                style={S.createBtn}
+                onClick={() => navigate("/vendors/new")}
+              >
+                + Add Vendor
+              </button>
+            )}
+          </div>
         </div>
+
+        {exportError && (
+          <div
+            style={{
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              color: "#dc2626",
+              padding: "10px 14px",
+              borderRadius: 8,
+              fontSize: 13,
+              marginBottom: 12,
+            }}
+          >
+            {exportError}
+          </div>
+        )}
 
         {/* Filters */}
         <div style={S.filterBar}>
@@ -866,5 +942,14 @@ const S = {
     fontSize: 14,
     outline: "none",
     boxSizing: "border-box",
+  },
+  exportBtn: {
+    padding: "10px 20px",
+    background: "#166534",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    fontSize: 14,
+    fontWeight: 600,
   },
 };

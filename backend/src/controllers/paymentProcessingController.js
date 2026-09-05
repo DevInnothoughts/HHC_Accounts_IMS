@@ -11,6 +11,10 @@ const {
 } = require("../config/constants");
 const { logAction } = require("../services/auditService");
 const { sendNotificationEmail } = require("../services/emailService");
+const {
+  buildFedOneWorkbook,
+  validateForFedOne,
+} = require("../services/fedOneExcelService");
 
 // "Payment Remark" cell = invoice remarks + description.
 // Remarks are frequently left blank, so the description keeps the column useful.
@@ -74,6 +78,7 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       status: "Cluster Head Approved",
       paymentRequest: { $ne: null }, // has a payment record
     };
+    const { debitAccountId } = req.body;
 
     // AFTER
     const branchScopedRoles = [
@@ -191,7 +196,7 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
     }
 
     const invoices = await InvoiceRequest.find(query)
-      .populate("branch", "name code")
+      .populate("branch", "name code bankAccounts")
       .populate(
         "vendor",
         "vendorName companyName accountNumber ifscCode bankName accountHolderName",
@@ -231,6 +236,7 @@ exports.getPayments = async (req, res) => {
     } = req.query;
     const { currentPage, perPage } = clampPaging(req.query);
     const query = {};
+    const { debitAccountId } = req.body;
 
     // AFTER
     const branchScopedRoles = [
@@ -301,7 +307,7 @@ exports.getPayments = async (req, res) => {
         "invoiceRequest",
         "requestId invoiceNumber invoiceDate netPayable",
       )
-      .populate("branch", "name code")
+      .populate("branch", "name code bankAccounts")
       .populate("vendor", "vendorName companyName")
       .populate("raisedBy", "name email")
       .sort({ createdAt: -1 })
@@ -325,6 +331,7 @@ exports.raisePayment = async (req, res) => {
     const { invoiceId } = req.params;
     const { paymentRemarks, scheduledDate, paymentAmount, paymentType } =
       req.body;
+    const { debitAccountId } = req.body;
 
     const invoice = await InvoiceRequest.findById(invoiceId).populate(
       "vendor branch createdBy",
@@ -442,6 +449,7 @@ exports.raisePayment = async (req, res) => {
 exports.approvePayment = async (req, res) => {
   try {
     const { remarks } = req.body;
+    const { debitAccountId } = req.body;
     const payment = await PaymentProcessing.findById(req.params.id).populate({
       path: "invoiceRequest",
       populate: { path: "vendor branch createdBy" },
@@ -498,6 +506,7 @@ exports.approvePayment = async (req, res) => {
 exports.rejectPayment = async (req, res) => {
   try {
     const { reason } = req.body;
+    const { debitAccountId } = req.body;
     if (!reason?.trim())
       return res.status(400).json({ message: "Rejection reason is required" });
 
@@ -581,6 +590,7 @@ exports.generateExcel = async (req, res) => {
         .status(403)
         .json({ message: "Only accounts team can generate payment Excel" });
     }
+    const { debitAccountId } = req.body;
 
     const invoice = payment.invoiceRequest;
     const vendor = invoice?.vendor;
@@ -801,6 +811,7 @@ exports.generateExcel = async (req, res) => {
 
 exports.getPaymentById = async (req, res) => {
   try {
+    const { debitAccountId } = req.body;
     const payment = await PaymentProcessing.findById(req.params.id)
       .populate({
         path: "invoiceRequest",
@@ -846,6 +857,7 @@ exports.getPaymentById = async (req, res) => {
 exports.bulkGenerateExcel = async (req, res) => {
   try {
     const { paymentIds } = req.body;
+    const { debitAccountId } = req.body;
     if (!paymentIds || paymentIds.length === 0)
       return res.status(400).json({ message: "No payment IDs provided" });
 
@@ -861,7 +873,7 @@ exports.bulkGenerateExcel = async (req, res) => {
         "vendor",
         "vendorName companyName accountHolderName bankName accountNumber ifscCode panNumber",
       )
-      .populate("branch", "name code")
+      .populate("branch", "name code bankAccounts")
       .populate("raisedBy", "name");
 
     if (payments.length === 0)
@@ -1034,11 +1046,225 @@ exports.bulkGenerateExcel = async (req, res) => {
   }
 };
 
+// ── FedOne (Federal Bank) bank-upload sheet ───────────────
+// Same eligibility, permissions and status transition as the existing
+// Excel export — only the file layout differs.
+
+// POST /api/payments/:id/fedone-excel
+exports.generateFedOneExcel = async (req, res) => {
+  try {
+    const { debitAccountId } = req.body;
+    const payment = await PaymentProcessing.findById(req.params.id)
+      .populate("invoiceRequest", "requestId invoiceNumber")
+      .populate(
+        "vendor",
+        "vendorName accountHolderName accountNumber ifscCode email",
+      )
+      .populate("branch", "name code bankAccounts");
+
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    if (req.user.role !== ROLES.ACCOUNTS) {
+      return res
+        .status(403)
+        .json({ message: "Only accounts team can generate payment Excel" });
+    }
+
+    if (
+      ![
+        PAYMENT_STATUS.ACCOUNTS_APPROVED,
+        PAYMENT_STATUS.EXCEL_GENERATED,
+      ].includes(payment.status)
+    ) {
+      return res.status(400).json({
+        message: `Excel can only be generated after Accounts Approval. Current status: ${payment.status}`,
+      });
+    }
+
+    // Branch scope — mirrors getPaymentById.
+    const branchScopedRoles = [
+      ROLES.BRANCH_USER,
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+      ROLES.CLUSTER_HEAD,
+    ];
+    if (branchScopedRoles.includes(req.user.role)) {
+      const allowed = req.user.branches.map((b) => b._id.toString());
+      const recordBranch = (payment.branch?._id || payment.branch)?.toString();
+      if (!allowed.includes(recordBranch)) {
+        return res
+          .status(403)
+          .json({ message: "You do not have access to this record" });
+      }
+    }
+
+    const errors = validateForFedOne(payment, debitAccountId);
+    if (errors.length) {
+      return res.status(400).json({
+        message: "This payment cannot be exported in FedOne format",
+        errors,
+      });
+    }
+
+    const isRegeneration = payment.status === PAYMENT_STATUS.EXCEL_GENERATED;
+    if (!isRegeneration) {
+      payment.status = PAYMENT_STATUS.EXCEL_GENERATED;
+      payment.currentStage = "closed";
+    }
+    payment.approvalHistory.push({
+      stage: isRegeneration
+        ? "FedOne Excel Regeneration"
+        : "FedOne Excel Generation",
+      approvedBy: req.user._id,
+      action: "approved",
+      remarks: "FedOne bank upload sheet generated",
+      actionAt: new Date(),
+    });
+    payment.excelGeneratedAt = new Date();
+    await payment.save();
+
+    const workbook = buildFedOneWorkbook([payment], debitAccountId);
+
+    await logAction({
+      userId: req.user._id,
+      action: "GENERATE_FEDONE_EXCEL",
+      module: "Payment",
+      targetId: payment._id,
+      req,
+    });
+
+    const fileName = `FedOne_${payment.paymentId}_${Date.now()}.xlsx`;
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("FedOne Excel error:", err);
+    res.status(500).json({ message: "FedOne Excel generation failed" });
+  }
+};
+
+// POST /api/payments/bulk-fedone-excel
+// Body: { paymentIds: ["id1", "id2", ...] }
+exports.bulkGenerateFedOneExcel = async (req, res) => {
+  try {
+    const { paymentIds } = req.body;
+    const { debitAccountId } = req.body;
+    if (!Array.isArray(paymentIds) || paymentIds.length === 0)
+      return res.status(400).json({ message: "No payment IDs provided" });
+
+    const ids = paymentIds.map(toId).filter(Boolean);
+    if (ids.length === 0)
+      return res.status(400).json({ message: "No valid payment IDs provided" });
+
+    const query = {
+      _id: { $in: ids },
+      status: {
+        $in: [PAYMENT_STATUS.ACCOUNTS_APPROVED, PAYMENT_STATUS.EXCEL_GENERATED],
+      },
+    };
+
+    // Branch scope — an accounts user must not be able to pull payments
+    // from branches they aren't assigned to by posting arbitrary ids.
+    const branchScopedRoles = [
+      ROLES.BRANCH_USER,
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+      ROLES.CLUSTER_HEAD,
+    ];
+    if (branchScopedRoles.includes(req.user.role)) {
+      query.branch = { $in: req.user.branches.map((b) => b._id) };
+    }
+
+    const payments = await PaymentProcessing.find(query)
+      .populate("invoiceRequest", "requestId invoiceNumber")
+      .populate(
+        "vendor",
+        "vendorName accountHolderName accountNumber ifscCode email",
+      )
+      .populate("branch", "name code bankAccounts");
+
+    if (payments.length === 0)
+      return res.status(404).json({ message: "No eligible payments found" });
+
+    // All-or-nothing: a half-valid file uploaded to the bank is worse
+    // than a clear error listing what to fix.
+    const errors = payments.flatMap((p) =>
+      validateForFedOne(p, debitAccountId),
+    );
+    if (errors.length) {
+      return res.status(400).json({
+        message: `${errors.length} payment(s) cannot be exported in FedOne format`,
+        errors,
+      });
+    }
+
+    // The bank rejects a file containing duplicate reference numbers.
+    const refs = payments.map((p) => resolveReference(p));
+    const duplicates = refs.filter((r, i) => refs.indexOf(r) !== i);
+    if (duplicates.length) {
+      return res.status(400).json({
+        message: "Duplicate reference numbers in selection",
+        errors: [...new Set(duplicates)],
+      });
+    }
+
+    const workbook = buildFedOneWorkbook(payments, debitAccountId);
+
+    await PaymentProcessing.updateMany(
+      { _id: { $in: payments.map((p) => p._id) } },
+      {
+        $set: {
+          status: PAYMENT_STATUS.EXCEL_GENERATED,
+          currentStage: "closed",
+          excelGeneratedAt: new Date(),
+        },
+        $push: {
+          approvalHistory: {
+            stage: "FedOne Excel Generation",
+            approvedBy: req.user._id,
+            action: "approved",
+            remarks: "FedOne bank upload sheet generated (bulk)",
+            actionAt: new Date(),
+          },
+        },
+      },
+    );
+
+    await logAction({
+      userId: req.user._id,
+      action: "GENERATE_FEDONE_EXCEL_BULK",
+      module: "Payment",
+      targetId: null,
+      req,
+    });
+
+    const timestamp = new Date().toISOString().slice(0, 10);
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="FedOne_Payments_${timestamp}.xlsx"`,
+    );
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("Bulk FedOne Excel error:", err);
+    res.status(500).json({ message: "FedOne Excel generation failed" });
+  }
+};
+
 // POST /api/payments/:id/utr
 // Body: { utrNumber }
 exports.recordUTR = async (req, res) => {
   try {
     const { utrNumber, installmentIndex, paymentDate } = req.body;
+    const { debitAccountId } = req.body;
     if (!utrNumber?.trim())
       return res.status(400).json({ message: "UTR number is required" });
 
@@ -1054,8 +1280,8 @@ exports.recordUTR = async (req, res) => {
     const payment = await PaymentProcessing.findById(req.params.id)
       .populate("invoiceRequest", "requestId netPayable")
       .populate("vendor", "vendorName")
-      .populate("branch", "name code") // ← ADD: needed for scoping + email body
-      .populate("raisedBy", "email name");
+      .populate("branch", "name code bankAccounts") // ← ADD: needed for scoping + email body
+      .populate("raisedBy", "email name status");
 
     if (!payment) return res.status(404).json({ message: "Payment not found" });
 
@@ -1114,10 +1340,10 @@ exports.recordUTR = async (req, res) => {
       // Raiser goes on To:, partner + cluster head on Cc:. De-duped, case-insensitive.
       const seen = new Set();
       const recipients = [];
-      for (const raw of [
-        payment.raisedBy?.email,
-        ...approvers.map((u) => u.email),
-      ]) {
+      const raiserEmail =
+        payment.raisedBy?.status === "active" ? payment.raisedBy.email : null;
+
+      for (const raw of [raiserEmail, ...approvers.map((u) => u.email)]) {
         const email = raw?.trim();
         if (!email) continue;
         const key = email.toLowerCase();

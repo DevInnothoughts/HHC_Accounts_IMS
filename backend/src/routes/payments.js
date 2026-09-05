@@ -24,6 +24,17 @@ router.post(
   ctrl.bulkGenerateExcel,
 );
 
+router.post(
+  "/:id/fedone-excel",
+  roleGuard(ROLES.ACCOUNTS),
+  ctrl.generateFedOneExcel,
+);
+router.post(
+  "/bulk-fedone-excel",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.bulkGenerateFedOneExcel,
+);
+
 router.patch(
   "/:id/utr",
   roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),

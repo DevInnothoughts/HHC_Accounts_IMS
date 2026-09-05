@@ -5,6 +5,10 @@ import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { ROLES, INVOICE_WORKFLOW } from "../config/constants.js";
+import {
+  AttachmentChips,
+  AttachmentPreview,
+} from "../components/AttachmentChips.jsx";
 
 const STATUS_STYLES = {
   Draft: { bg: "#f1f5f9", color: "#475569", icon: "📝" },
@@ -40,6 +44,7 @@ export default function InvoiceRequests() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [searchParams] = useSearchParams();
+  const [preview, setPreview] = useState(null); // { invoice, index }
 
   // Restore last-used filters/search for this browser session so they survive
   // navigating into an invoice and back. A URL param (e.g. a Dashboard link
@@ -312,6 +317,7 @@ export default function InvoiceRequests() {
                     "Priority",
                     "Status",
                     "Date",
+                    "Docs",
                     "",
                   ].map((h) => (
                     <th key={h} style={S.th}>
@@ -370,6 +376,16 @@ export default function InvoiceRequests() {
                       </td>
                       <td style={{ ...S.td, color: "#94a3b8", fontSize: 12 }}>
                         {new Date(inv.createdAt).toLocaleDateString("en-GB")}
+                      </td>
+
+                      {/* ── Attachment quick buttons ── */}
+                      <td style={S.td} onClick={(e) => e.stopPropagation()}>
+                        <AttachmentChips
+                          attachments={inv.attachments || []}
+                          onOpen={(index) =>
+                            setPreview({ invoice: inv, index })
+                          }
+                        />
                       </td>
                       <td
                         style={{ ...S.td, textAlign: "right" }}
@@ -485,6 +501,15 @@ export default function InvoiceRequests() {
             Next →
           </button>
         </div>
+        {preview && (
+          <AttachmentPreview
+            title={preview.invoice.requestId}
+            attachments={preview.invoice.attachments || []}
+            index={preview.index}
+            onIndex={(index) => setPreview((p) => ({ ...p, index }))}
+            onClose={() => setPreview(null)}
+          />
+        )}
       </main>
     </div>
   );

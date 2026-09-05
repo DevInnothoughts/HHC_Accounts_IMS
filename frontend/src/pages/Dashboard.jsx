@@ -8,7 +8,17 @@ import { useAuth } from "../context/AuthContext.jsx";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 
-const fmt = (n) => `₹${Math.round(Number(n) || 0).toLocaleString("en-IN")}`;
+// Indian short-scale money. Full precision stays available in the
+// tooltip (title attribute) on each card.
+const fmt = (n) => {
+  const v = Number(n) || 0;
+  const abs = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (abs >= 1e7) return `${sign}₹${(abs / 1e7).toFixed(2)} Cr`;
+  if (abs >= 1e5) return `${sign}₹${(abs / 1e5).toFixed(2)} L`;
+  if (abs >= 1e3) return `${sign}₹${(abs / 1e3).toFixed(1)} K`;
+  return `${sign}₹${abs.toLocaleString("en-IN")}`;
+};
 const fmtNum = (n) => (Number(n) || 0).toLocaleString("en-IN");
 
 const ROLE_LABELS = {
@@ -35,18 +45,32 @@ const ACTION_COLORS = {
 
 // ── Sub-components ─────────────────────────────────────────
 
-const StatCard = ({ label, value, icon, color = "#1a3c6e", sub, onClick }) => (
+// Long currency strings need to shrink and, past a point, wrap to
+// their own line rather than push out of a 160px card.
+const valueFontSize = (v) => {
+  const len = String(v ?? "").length;
+  if (len <= 8) return 24;
+  if (len <= 11) return 20;
+  if (len <= 14) return 17;
+  return 15;
+};
+
+const StatCard = ({ label, value, color, icon, sub, onClick }) => (
   <div
     style={{
       ...SC.card,
-      borderTop: `3px solid ${color}`,
       cursor: onClick ? "pointer" : "default",
     }}
     onClick={onClick}
   >
     <div style={SC.top}>
-      <span style={{ fontSize: 26 }}>{icon}</span>
-      <span style={{ ...SC.value, color }}>{value}</span>
+      <span style={SC.icon}>{icon}</span>
+      <span
+        style={{ ...SC.value, color, fontSize: valueFontSize(value) }}
+        title={String(value ?? "")}
+      >
+        {value}
+      </span>
     </div>
     <div style={SC.label}>{label}</div>
     {sub && <div style={SC.sub}>{sub}</div>}
@@ -60,14 +84,28 @@ const SC = {
     padding: "16px 18px",
     boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
     minWidth: 0,
+    overflow: "hidden",
   },
   top: {
     display: "flex",
     justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "baseline",
+    // A value too long to sit beside the icon drops to its own line
+    // instead of overflowing the card.
+    flexWrap: "wrap",
+    gap: 6,
     marginBottom: 8,
   },
-  value: { fontSize: 24, fontWeight: 700 },
+  icon: { fontSize: 26, flexShrink: 0, lineHeight: 1 },
+  value: {
+    fontWeight: 700,
+    // flex-1 + minWidth:0 is what actually lets it shrink inside a grid cell
+    flex: "1 1 auto",
+    minWidth: 0,
+    textAlign: "right",
+    lineHeight: 1.15,
+    overflowWrap: "anywhere",
+  },
   label: { fontSize: 13, color: "#64748b", fontWeight: 500 },
   sub: { fontSize: 12, color: "#94a3b8", marginTop: 3 },
 };
@@ -748,7 +786,7 @@ const S = {
   // Stats grid
   statsGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+    gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))",
     gap: 12,
   },
 

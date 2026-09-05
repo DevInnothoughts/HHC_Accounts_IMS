@@ -10,7 +10,13 @@ const AuditLog = require("../models/AuditLog");
 
 // Returns a branch-scope match for branch-restricted roles, or {} for unrestricted roles.
 const buildReportBranchScope = (user) => {
-  const branchScopedRoles = ["branch_user", "branch_partner", "accounts"];
+  const branchScopedRoles = [
+    "branch_user",
+    "branch_partner",
+    "accounts",
+    "cluster_head",
+    "director",
+  ];
   if (!branchScopedRoles.includes(user.role)) return {}; // super_admin / director → all branches
   return { branch: { $in: (user.branches || []).map((b) => b._id) } };
 };

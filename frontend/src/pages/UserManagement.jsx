@@ -48,6 +48,7 @@ export default function UserManagement() {
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState("");
   const [filterStatus, setFilterStatus] = useState("");
+  const [filterBranch, setFilterBranch] = useState("");
   const [modal, setModal] = useState(null); // null | 'create' | 'edit'
   const [form, setForm] = useState(INIT_USER);
   const [branches, setBranches] = useState([]);
@@ -64,6 +65,7 @@ export default function UserManagement() {
         ...(search && { search }),
         ...(filterRole && { role: filterRole }),
         ...(filterStatus && { status: filterStatus }),
+        ...(filterBranch && { branch: filterBranch }),
       });
       const { data } = await api.get(`/users?${params}`);
       setUsers(data.users);
@@ -73,7 +75,7 @@ export default function UserManagement() {
     } finally {
       setLoading(false);
     }
-  }, [page, search, filterRole, filterStatus]);
+  }, [page, search, filterRole, filterStatus, filterBranch]);
 
   useEffect(() => {
     fetchUsers();
@@ -140,6 +142,16 @@ export default function UserManagement() {
     setModal("edit");
   };
 
+  const allBranchesSelected =
+    branches.length > 0 && branches.every((b) => form.branches.includes(b._id));
+  const someBranchesSelected = form.branches.length > 0 && !allBranchesSelected;
+
+  const toggleAllBranches = () =>
+    setForm((f) => ({
+      ...f,
+      branches: allBranchesSelected ? [] : branches.map((b) => b._id),
+    }));
+
   return (
     <div style={S.layout}>
       <Sidebar />
@@ -200,6 +212,21 @@ export default function UserManagement() {
             <option value="">All Status</option>
             <option value="active">Active</option>
             <option value="inactive">Inactive</option>
+          </select>
+          <select
+            style={S.select}
+            value={filterBranch}
+            onChange={(e) => {
+              setFilterBranch(e.target.value);
+              setPage(1);
+            }}
+          >
+            <option value="">All Branches</option>
+            {branches.map((b) => (
+              <option key={b._id} value={b._id}>
+                {b.name} ({b.code})
+              </option>
+            ))}
           </select>
           <button
             style={S.resetBtn}
@@ -445,6 +472,28 @@ export default function UserManagement() {
                   </select>
                 </MField>
                 <MField label="Branches" fullWidth>
+                  <div style={S.branchSelectHeader}>
+                    <label style={{ ...S.checkItem, fontWeight: 600 }}>
+                      <input
+                        type="checkbox"
+                        checked={allBranchesSelected}
+                        // Partial selection shows a dash rather than an empty box
+                        ref={(el) => {
+                          if (el) el.indeterminate = someBranchesSelected;
+                        }}
+                        onChange={toggleAllBranches}
+                      />
+                      <span style={{ fontSize: 13 }}>
+                        {allBranchesSelected
+                          ? "Clear all"
+                          : "Select all branches"}
+                      </span>
+                    </label>
+                    <span style={S.branchCount}>
+                      {form.branches.length} of {branches.length} selected
+                    </span>
+                  </div>
+
                   <div style={S.branchSelect}>
                     {branches.map((b) => (
                       <label key={b._id} style={S.checkItem}>
@@ -749,4 +798,15 @@ const S = {
     fontWeight: 700,
     fontSize: 14,
   },
+  branchSelectHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    padding: "8px 10px",
+    marginBottom: 6,
+    background: "#f8fafc",
+    border: `1px solid ${C.border}`,
+    borderRadius: 8,
+  },
+  branchCount: { fontSize: 12, color: "#64748b" },
 };
