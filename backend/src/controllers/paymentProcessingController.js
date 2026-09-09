@@ -14,6 +14,7 @@ const { sendNotificationEmail } = require("../services/emailService");
 const {
   buildFedOneWorkbook,
   validateForFedOne,
+  resolveReference,
 } = require("../services/fedOneExcelService");
 
 // "Payment Remark" cell = invoice remarks + description.
@@ -78,7 +79,6 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       status: "Cluster Head Approved",
       paymentRequest: { $ne: null }, // has a payment record
     };
-    const { debitAccountId } = req.body;
 
     // AFTER
     const branchScopedRoles = [
@@ -236,7 +236,6 @@ exports.getPayments = async (req, res) => {
     } = req.query;
     const { currentPage, perPage } = clampPaging(req.query);
     const query = {};
-    const { debitAccountId } = req.body;
 
     // AFTER
     const branchScopedRoles = [
@@ -331,7 +330,6 @@ exports.raisePayment = async (req, res) => {
     const { invoiceId } = req.params;
     const { paymentRemarks, scheduledDate, paymentAmount, paymentType } =
       req.body;
-    const { debitAccountId } = req.body;
 
     const invoice = await InvoiceRequest.findById(invoiceId).populate(
       "vendor branch createdBy",
@@ -449,7 +447,6 @@ exports.raisePayment = async (req, res) => {
 exports.approvePayment = async (req, res) => {
   try {
     const { remarks } = req.body;
-    const { debitAccountId } = req.body;
     const payment = await PaymentProcessing.findById(req.params.id).populate({
       path: "invoiceRequest",
       populate: { path: "vendor branch createdBy" },
@@ -506,7 +503,6 @@ exports.approvePayment = async (req, res) => {
 exports.rejectPayment = async (req, res) => {
   try {
     const { reason } = req.body;
-    const { debitAccountId } = req.body;
     if (!reason?.trim())
       return res.status(400).json({ message: "Rejection reason is required" });
 
@@ -590,7 +586,6 @@ exports.generateExcel = async (req, res) => {
         .status(403)
         .json({ message: "Only accounts team can generate payment Excel" });
     }
-    const { debitAccountId } = req.body;
 
     const invoice = payment.invoiceRequest;
     const vendor = invoice?.vendor;
@@ -811,7 +806,6 @@ exports.generateExcel = async (req, res) => {
 
 exports.getPaymentById = async (req, res) => {
   try {
-    const { debitAccountId } = req.body;
     const payment = await PaymentProcessing.findById(req.params.id)
       .populate({
         path: "invoiceRequest",
@@ -857,7 +851,6 @@ exports.getPaymentById = async (req, res) => {
 exports.bulkGenerateExcel = async (req, res) => {
   try {
     const { paymentIds } = req.body;
-    const { debitAccountId } = req.body;
     if (!paymentIds || paymentIds.length === 0)
       return res.status(400).json({ message: "No payment IDs provided" });
 
@@ -1024,7 +1017,22 @@ exports.bulkGenerateExcel = async (req, res) => {
     // ── Mark all as Excel Generated ─────────────────────
     await PaymentProcessing.updateMany(
       { _id: { $in: payments.map((p) => p._id) } },
-      { $set: { status: "Excel Generated", excelGeneratedAt: new Date() } },
+      {
+        $set: {
+          status: PAYMENT_STATUS.EXCEL_GENERATED,
+          currentStage: "closed",
+          excelGeneratedAt: new Date(),
+        },
+        $push: {
+          approvalHistory: {
+            stage: "Excel Generation",
+            approvedBy: req.user._id,
+            action: "approved",
+            remarks: "Excel generated for bank payment (bulk)",
+            actionAt: new Date(),
+          },
+        },
+      },
     );
 
     // ── Stream response ──────────────────────────────────
@@ -1055,7 +1063,11 @@ exports.generateFedOneExcel = async (req, res) => {
   try {
     const { debitAccountId } = req.body;
     const payment = await PaymentProcessing.findById(req.params.id)
-      .populate("invoiceRequest", "requestId invoiceNumber")
+      .populate({
+        path: "invoiceRequest",
+        select: "requestId invoiceNumber expenseCategory",
+        populate: { path: "expenseCategory", select: "name code type" },
+      })
       .populate(
         "vendor",
         "vendorName accountHolderName accountNumber ifscCode email",
@@ -1180,7 +1192,11 @@ exports.bulkGenerateFedOneExcel = async (req, res) => {
     }
 
     const payments = await PaymentProcessing.find(query)
-      .populate("invoiceRequest", "requestId invoiceNumber")
+      .populate({
+        path: "invoiceRequest",
+        select: "requestId invoiceNumber expenseCategory",
+        populate: { path: "expenseCategory", select: "name code type" },
+      })
       .populate(
         "vendor",
         "vendorName accountHolderName accountNumber ifscCode email",
@@ -1264,7 +1280,6 @@ exports.bulkGenerateFedOneExcel = async (req, res) => {
 exports.recordUTR = async (req, res) => {
   try {
     const { utrNumber, installmentIndex, paymentDate } = req.body;
-    const { debitAccountId } = req.body;
     if (!utrNumber?.trim())
       return res.status(400).json({ message: "UTR number is required" });
 

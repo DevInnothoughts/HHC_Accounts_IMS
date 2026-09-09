@@ -932,50 +932,54 @@ export default function PaymentProcessing() {
                       </button>
                     )}
                   </div>
-                  <button
-                    style={{
-                      ...S.bulkExcelBtn,
-                      opacity:
-                        selectedIds.length === 0 || bulkGenerating ? 0.5 : 1,
-                      cursor:
-                        selectedIds.length === 0 || bulkGenerating
-                          ? "not-allowed"
-                          : "pointer",
-                    }}
-                    disabled={selectedIds.length === 0 || bulkGenerating}
-                    onClick={() => {
-                      if (selectedIds.length === 0) return;
-                      setBulkFormat("standard");
-                      setShowBulkConfirm(true);
-                    }}
-                  >
-                    {bulkGenerating
-                      ? "⏳ Generating..."
-                      : `📊 Generate Excel (${selectedIds.length})`}
-                  </button>
-                  <button
-                    style={{
-                      ...S.bulkExcelBtn,
-                      background: "#0f766e",
-                      marginLeft: 8,
-                      opacity:
-                        selectedIds.length === 0 || bulkGenerating ? 0.5 : 1,
-                      cursor:
-                        selectedIds.length === 0 || bulkGenerating
-                          ? "not-allowed"
-                          : "pointer",
-                    }}
-                    disabled={selectedIds.length === 0 || bulkGenerating}
-                    onClick={() => {
-                      if (selectedIds.length === 0) return;
-                      setBulkFormat("fedone");
-                      setShowBulkConfirm(true);
-                    }}
-                  >
-                    {bulkGenerating
-                      ? "⏳ Generating..."
-                      : `🏦 FedOne Excel (${selectedIds.length})`}
-                  </button>
+                  {/* Both bulk actions travel together as one flex child, so
+    space-between can't strand one of them mid-row. */}
+                  <div style={S.bulkActions}>
+                    <button
+                      style={{
+                        ...S.bulkExcelBtn,
+                        opacity:
+                          selectedIds.length === 0 || bulkGenerating ? 0.5 : 1,
+                        cursor:
+                          selectedIds.length === 0 || bulkGenerating
+                            ? "not-allowed"
+                            : "pointer",
+                      }}
+                      disabled={selectedIds.length === 0 || bulkGenerating}
+                      onClick={() => {
+                        if (selectedIds.length === 0) return;
+                        setBulkFormat("standard");
+                        setShowBulkConfirm(true);
+                      }}
+                    >
+                      {bulkGenerating
+                        ? "⏳ Generating..."
+                        : `📊 Generate Excel (${selectedIds.length})`}
+                    </button>
+
+                    <button
+                      style={{
+                        ...S.bulkExcelBtn,
+                        background: "#0f766e",
+                        opacity:
+                          selectedIds.length === 0 || bulkGenerating ? 0.5 : 1,
+                        cursor:
+                          selectedIds.length === 0 || bulkGenerating
+                            ? "not-allowed"
+                            : "pointer",
+                      }}
+                      disabled={selectedIds.length === 0 || bulkGenerating}
+                      onClick={() => {
+                        if (selectedIds.length === 0) return;
+                        setBulkFormat("fedone");
+                        setShowBulkConfirm(true);
+                      }}
+                    >
+                      {bulkGenerating
+                        ? "⏳ Generating..."
+                        : `🏦 FedOne Excel (${selectedIds.length})`}
+                    </button>
+                  </div>
                 </div>
 
                 <div style={S.tableCard}>
@@ -2237,6 +2241,8 @@ const S = {
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
+    flexWrap: "wrap",
+    gap: 10,
     background: "#fff",
     border: `1px solid ${C.border}`,
     borderRadius: 10,
@@ -2265,5 +2271,11 @@ const S = {
     fontSize: 12,
     fontWeight: 600,
     cursor: "pointer",
+  },
+  bulkActions: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexShrink: 0,
   },
 };

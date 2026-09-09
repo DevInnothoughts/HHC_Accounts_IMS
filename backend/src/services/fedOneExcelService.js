@@ -38,7 +38,7 @@ const THIN = { style: "thin" };
 const HEADER_BORDER = { top: THIN, left: THIN, bottom: THIN, right: THIN };
 
 // Field caps enforced by the FedNet parser.
-const MAX = { beneName: 40, remarks: 30, email: 50, urn: 20 };
+const MAX = { beneName: 40, remarks: 40, email: 50, urn: 20 };
 
 // The bank rejects most punctuation in free-text fields.
 const clean = (value, max) =>
@@ -53,6 +53,29 @@ const cleanRef = (value) =>
   String(value ?? "")
     .replace(/[^A-Za-z0-9]/g, "")
     .slice(0, MAX.urn);
+
+// Bank remark fields: "Expense Category / Invoice Number".
+// The field is capped at 30 characters and the invoice number is what
+// reconciliation keys on, so it is kept whole and the category is trimmed
+// to whatever room is left.
+const buildBankRemark = (invoice, fallbackRef) => {
+  const category = clean(
+    invoice?.expenseCategory?.name || invoice?.expenseCategory?.code || "",
+    MAX.remarks,
+  );
+  const number = clean(
+    invoice?.invoiceNumber || fallbackRef || "",
+    MAX.remarks,
+  );
+
+  if (!category) return number;
+  if (!number) return category;
+
+  const sep = " / ";
+  const room = MAX.remarks - number.length - sep.length;
+  if (room < 3) return number; // no useful room for a category
+  return `${category.slice(0, room).trim()}${sep}${number}`;
+};
 
 const toMoney = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -151,6 +174,8 @@ const buildRow = (payment, preferredAccountId) => {
   const debitAccount = resolveDebitAccount(branch, preferredAccountId);
   const amount = resolveAmount(payment);
   const ifsc = String(vendor?.ifscCode || "").toUpperCase();
+  // Accounts want the same "Category / Invoice" string on both sides.
+  const remark = buildBankRemark(invoice, payment.paymentId);
 
   return {
     transactionType: resolveTransactionType(amount, ifsc, debitAccount),
@@ -167,16 +192,8 @@ const buildRow = (payment, preferredAccountId) => {
       .trim()
       .slice(0, MAX.email),
     beneId: "",
-    creditRemarks: clean(
-      invoice?.invoiceNumber
-        ? `INV ${invoice.invoiceNumber}`
-        : payment.paymentId,
-      MAX.remarks,
-    ),
-    debitRemarks: clean(
-      `${branch?.code || "HHC"} ${vendor?.vendorName || ""}`,
-      MAX.remarks,
-    ),
+    creditRemarks: remark,
+    debitRemarks: remark,
     urn: resolveReference(payment),
   };
 };
