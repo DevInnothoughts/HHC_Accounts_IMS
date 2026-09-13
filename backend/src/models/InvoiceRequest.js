@@ -35,6 +35,20 @@ const invoiceItemSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// Payment cycle. Both blocks are optional, so every existing invoice
+// document stays valid and no migration is required.
+const paymentCycleSnapshotSchema = new mongoose.Schema(
+  {
+    cycleKey: { type: String, enum: ["CYCLE_7", "CYCLE_21"] },
+    cycleLabel: { type: String },
+    cutoffDate: { type: Date },
+    paymentDate: { type: Date },
+    basisDate: { type: String }, // "YYYY-MM-DD" in IST
+    recordedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 const invoiceRequestSchema = new mongoose.Schema(
   {
     requestId: { type: String, unique: true },
@@ -98,8 +112,24 @@ const invoiceRequestSchema = new mongoose.Schema(
       ref: "PaymentProcessing",
       default: null,
     },
+
+    // ── Payment cycle ──────────────────────────────────────
+    paymentCycle: {
+      // What the branch was shown when they submitted. Indicative
+      // only — never used to decide when money moves.
+      projected: { type: paymentCycleSnapshotSchema, default: undefined },
+      // Fixed when the Cluster Head gives final approval. Authoritative.
+      assigned: { type: paymentCycleSnapshotSchema, default: undefined },
+    },
   },
   { timestamps: true },
+);
+
+// Supports the Accounts payment queue filtered by cycle. Sparse, so
+// only invoices that have reached final approval enter the index.
+invoiceRequestSchema.index(
+  { "paymentCycle.assigned.paymentDate": 1, status: 1 },
+  { sparse: true },
 );
 
 invoiceRequestSchema.pre("save", async function (next) {

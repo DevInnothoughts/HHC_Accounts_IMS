@@ -1015,6 +1015,46 @@ export default function InvoiceDetail() {
             </div>
           </div>
         )}
+
+        {invoice?.paymentCycle?.assigned && (
+          <div
+            style={{
+              background: "#f0fdfa",
+              border: "1px solid #99f6e4",
+              borderRadius: 10,
+              padding: "12px 14px",
+              marginBottom: 16,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#0f766e" }}>
+              PAYMENT CYCLE
+            </div>
+            <div
+              style={{
+                fontSize: 16,
+                fontWeight: 700,
+                color: "#0f172a",
+                marginTop: 4,
+              }}
+            >
+              {invoice.paymentCycle.assigned.cycleLabel} ·{" "}
+              {new Date(
+                invoice.paymentCycle.assigned.paymentDate,
+              ).toLocaleDateString("en-GB", {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 5 }}>
+              {invoice.paymentCycle.assigned.derived
+                ? "Derived from the approval history of this invoice."
+                : "Fixed on final approval."}{" "}
+              If this date falls on a Sunday or bank holiday, payment moves to
+              the next working day.
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );

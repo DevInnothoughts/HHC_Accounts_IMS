@@ -8,6 +8,10 @@ import DuplicateInvoiceChecker from "../components/DuplicateInvoiceChecker.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import InvoiceItemsEditor from "../components/InvoiceItemsEditor.jsx";
 import SearchableSelect from "../components/SearchableSelect.jsx";
+import {
+  usePaymentCycle,
+  PaymentCycleModal,
+} from "../components/PaymentCycleWidgets.jsx";
 
 const PRIORITY_OPTIONS = ["Normal", "Urgent", "Critical"];
 const EXPENSE_TYPES = ["Revenue", "Capital"];
@@ -69,6 +73,8 @@ export default function CreatePaymentRequest() {
   const [success, setSuccess] = useState("");
   const [dupResult, setDupResult] = useState(null);
   const [showItemErrors, setShowItemErrors] = useState(false);
+  const { cycle, loading: cycleLoading } = usePaymentCycle();
+  const [showCycleModal, setShowCycleModal] = useState(false);
 
   // ✅ Two-phase: save draft first to get ID, then allow uploads
   const [savedInvoiceId, setSavedInvoiceId] = useState(null);
@@ -250,7 +256,10 @@ export default function CreatePaymentRequest() {
   // ✅ Final submit
   const REQUIRED_DOC_TYPES = ["invoice", "quotation"];
 
-  const handleSubmit = async () => {
+  // Runs all existing validation, then opens the cycle popup.
+  // Validation stays BEFORE the popup so the user is never shown the
+  // cycle and then bounced back by a missing-document error.
+  const handleSubmitClick = () => {
     if (dupResult?.isDuplicate) {
       setErrors({ submit: "Cannot submit: duplicate invoice detected" });
       return;
@@ -266,16 +275,23 @@ export default function CreatePaymentRequest() {
       });
       return;
     }
+    setErrors({});
+    setShowCycleModal(true);
+  };
+
+  // The actual submit, now only reached after the user confirms.
+  const handleSubmit = async () => {
     setSubmitting(true);
     try {
-      // Update form data on existing draft
       if (savedInvoiceId) {
         await api.put(`/invoices/${savedInvoiceId}`, form);
         await api.patch(`/invoices/${savedInvoiceId}/submit`);
       }
+      setShowCycleModal(false);
       setSuccess("Invoice submitted successfully!");
       setTimeout(() => navigate("/invoices"), 1800);
     } catch (err) {
+      setShowCycleModal(false);
       setErrors({ submit: err.response?.data?.message || "Submit failed" });
     } finally {
       setSubmitting(false);
@@ -913,7 +929,7 @@ export default function CreatePaymentRequest() {
                             opacity: blocked ? 0.5 : 1,
                             cursor: blocked ? "not-allowed" : "pointer",
                           }}
-                          onClick={handleSubmit}
+                          onClick={handleSubmitClick}
                           disabled={blocked}
                         >
                           {submitting ? "Submitting..." : "🚀 Submit Invoice"}
@@ -926,6 +942,15 @@ export default function CreatePaymentRequest() {
             </div>
           </div>
         </div>
+        {showCycleModal && (
+          <PaymentCycleModal
+            cycle={cycle}
+            loading={cycleLoading}
+            submitting={submitting}
+            onConfirm={handleSubmit}
+            onCancel={() => setShowCycleModal(false)}
+          />
+        )}
       </main>
     </div>
   );

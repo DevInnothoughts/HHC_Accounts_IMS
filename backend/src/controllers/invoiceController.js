@@ -16,6 +16,7 @@ const { checkBudget } = require("../services/budgetService");
 const {
   checkDuplicateInvoice,
 } = require("../services/duplicateInvoiceService");
+const { resolvePaymentCycle, toStoredShape } = require("../utils/paymentCycle");
 
 const getWorkflowStep = (status) =>
   INVOICE_WORKFLOW.find((w) => w.status === status) || null;
@@ -41,6 +42,31 @@ const computeInvoiceTotals = (items = []) => {
   const amount = +normalized.reduce((s, i) => s + i.amount, 0).toFixed(2);
   const gstAmount = +normalized.reduce((s, i) => s + i.gstAmount, 0).toFixed(2);
   return { items: normalized, amount, gstAmount };
+};
+
+// Existing invoices predate this field. Their cycle is derived at read
+// time from the Cluster Head entry already present in approvalHistory.
+// Nothing is written.
+const withDerivedCycle = (doc) => {
+  const obj = doc?.toObject ? doc.toObject() : doc;
+  if (!obj) return obj;
+  if (obj.paymentCycle?.assigned?.cycleKey) return obj;
+  if (obj.status !== INVOICE_STATUS.CLUSTER_APPROVED) return obj;
+
+  const finalApproval = [...(obj.approvalHistory || [])]
+    .reverse()
+    .find((h) => h.action === "approved" && /cluster/i.test(h.stage || ""));
+
+  const basis = finalApproval?.actionAt || obj.updatedAt;
+  if (!basis) return obj;
+
+  const derived = resolvePaymentCycle(basis);
+  obj.paymentCycle = obj.paymentCycle || {};
+  obj.paymentCycle.assigned = {
+    ...toStoredShape(derived, { recordedAt: new Date(basis) }),
+    derived: true, // lets the UI mark it as inferred rather than recorded
+  };
+  return obj;
 };
 
 exports.createInvoice = async (req, res) => {
@@ -156,6 +182,16 @@ exports.submitInvoice = async (req, res) => {
         message: `Cannot submit invoice with status: ${invoice.status}`,
       });
     }
+
+    // ── Payment cycle (projected) ──────────────────────────
+    // Indicative only. The real cycle is fixed when the Cluster Head
+    // gives final approval, so this is recorded purely so we can
+    // later compare what the branch expected against what happened.
+    const projected = resolvePaymentCycle(new Date(), { projection: true });
+    invoice.paymentCycle = invoice.paymentCycle || {};
+    invoice.paymentCycle.projected = toStoredShape(projected, {
+      recordedAt: new Date(),
+    });
 
     // ✅ Check if branch has any active branch_partner
     const branchPartnerExists = await User.exists({
@@ -293,6 +329,22 @@ exports.approveInvoice = async (req, res) => {
     // ✅ If Cluster Head approves — invoice processing COMPLETE
     // Create a PaymentProcessing record automatically in 'Payment Pending' state
     if (step.nextStatus === "Cluster Head Approved") {
+      // ── Payment cycle (assigned) ─────────────────────────
+      // This is the moment the cycle is fixed. Written unconditionally:
+      // if an invoice is rejected and later re-approved, the LATER
+      // approval governs payment.
+      const approvedAt = new Date();
+      const cycle = resolvePaymentCycle(approvedAt);
+
+      assignedCycleBefore = invoice.paymentCycle?.assigned
+        ? { ...invoice.paymentCycle.assigned }
+        : null;
+
+      invoice.paymentCycle = invoice.paymentCycle || {};
+      invoice.paymentCycle.assigned = toStoredShape(cycle, {
+        recordedAt: approvedAt,
+      });
+
       const PaymentProcessing = require("../models/PaymentProcessing");
       const payment = await PaymentProcessing.create({
         invoiceRequest: invoice._id,
@@ -305,6 +357,7 @@ exports.approveInvoice = async (req, res) => {
         status: "Payment Pending",
         currentStage: "accounts", // ✅ was "branch" — now accounts handles it
         raisedBy: invoice.createdBy._id || invoice.createdBy,
+        scheduledDate: cycle.paymentDate,
       });
 
       // Link payment back to invoice
@@ -318,7 +371,17 @@ exports.approveInvoice = async (req, res) => {
           invoice.createdBy.email,
           `✅ Invoice Approved: ${invoice.requestId}`,
           `<p>Your invoice <strong>${invoice.requestId}</strong> has been fully approved by the Cluster Head.</p>
-     <p>It has been forwarded to the <strong>Accounts team</strong> for payment processing — no further action is needed from you.</p>`,
+           <p>It has been forwarded to the <strong>Accounts team</strong> for payment processing — no further action is needed from you.</p>
+           <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;margin-top:12px;">
+             <div style="font-size:13px;color:#0f766e;font-weight:600;">Payment Cycle</div>
+             <div style="font-size:15px;color:#0f172a;font-weight:700;margin-top:4px;">
+               ${cycle.cycleLabel} &middot; ${cycle.paymentDateLabel}
+             </div>
+             <div style="font-size:12px;color:#64748b;margin-top:6px;">
+               If this date falls on a Sunday or a bank holiday, the payment will be
+               processed on the next working day.
+             </div>
+           </div>`,
         ).catch(console.error);
       }
 
@@ -407,10 +470,16 @@ exports.approveInvoice = async (req, res) => {
       userId: req.user._id,
       action: "APPROVE_INVOICE",
       module: "Invoice",
-      targetDoc: invoice, // label, branch, amount derived
-      statusFrom: previousStatus, // capture before invoice.status is set
+      targetDoc: invoice,
+      statusFrom: previousStatus,
       statusTo: invoice.status,
       reason: req.body.remarks,
+      oldValue: assignedCycleBefore
+        ? { paymentCycle: assignedCycleBefore }
+        : undefined,
+      newValue: invoice.paymentCycle?.assigned
+        ? { paymentCycle: invoice.paymentCycle.assigned }
+        : undefined,
       req,
     });
     res.json(invoice);
@@ -433,6 +502,9 @@ exports.rejectInvoice = async (req, res) => {
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
     const previousStatus = invoice.status;
+    let assignedCycleBefore = invoice.paymentCycle?.assigned
+      ? { ...invoice.paymentCycle.assigned }
+      : null;
 
     // ✅ Allow accounts to reject partner-skipped invoices at Submitted stage
     const partnerSkipped =
@@ -657,7 +729,7 @@ exports.getInvoices = async (req, res) => {
       .limit(Number(limit));
 
     res.json({
-      invoices,
+      invoices: invoices.map(withDerivedCycle),
       total,
       page: Number(page),
       pages: Math.ceil(total / limit),
@@ -697,7 +769,7 @@ exports.getInvoiceById = async (req, res) => {
           .json({ message: "You do not have access to this record" });
       }
     }
-    res.json(invoice);
+    res.json(withDerivedCycle(invoice));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

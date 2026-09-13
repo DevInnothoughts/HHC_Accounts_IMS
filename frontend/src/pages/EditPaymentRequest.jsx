@@ -7,6 +7,10 @@ import { useAuth } from "../context/AuthContext.jsx";
 import DuplicateInvoiceChecker from "../components/DuplicateInvoiceChecker.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import InvoiceItemsEditor from "../components/InvoiceItemsEditor.jsx";
+import {
+  usePaymentCycle,
+  PaymentCycleModal,
+} from "../components/PaymentCycleWidgets.jsx";
 
 const PRIORITY_OPTIONS = ["Normal", "Urgent", "Critical"];
 const EXPENSE_TYPES = ["Revenue", "Capital"];
@@ -54,6 +58,8 @@ export default function EditPaymentRequest() {
   const [dupResult, setDupResult] = useState(null);
   const [showItemErrors, setShowItemErrors] = useState(false);
   const [attachments, setAttachments] = useState([]);
+  const { cycle, loading: cycleLoading } = usePaymentCycle();
+  const [showCycleModal, setShowCycleModal] = useState(false);
 
   // ── Load existing request ──────────────────────────────
   useEffect(() => {
@@ -261,7 +267,7 @@ export default function EditPaymentRequest() {
   // ── Save + Submit ──────────────────────────────────────
   const REQUIRED_DOC_TYPES = ["invoice", "quotation"];
 
-  const handleSaveAndSubmit = async () => {
+  const handleSaveAndSubmitClick = () => {
     if (dupResult?.isDuplicate) {
       setErrors({ submit: "Cannot submit: duplicate invoice detected." });
       return;
@@ -277,19 +283,8 @@ export default function EditPaymentRequest() {
       });
       return;
     }
-    setSubmitting(true);
-    try {
-      // First save the edits
-      await api.put(`/invoices/${id}`, form);
-      // Then submit
-      await api.patch(`/invoices/${id}/submit`);
-      setSuccess("Request submitted successfully!");
-      setTimeout(() => navigate(`/payments/${id}`), 1800);
-    } catch (err) {
-      setErrors({ submit: err.response?.data?.message || "Submit failed" });
-    } finally {
-      setSubmitting(false);
-    }
+    setErrors({});
+    setShowCycleModal(true);
   };
 
   // ✅ Re-fetch attachments from server after upload/delete
@@ -998,7 +993,7 @@ export default function EditPaymentRequest() {
                             opacity: blocked ? 0.5 : 1,
                             cursor: blocked ? "not-allowed" : "pointer",
                           }}
-                          onClick={handleSaveAndSubmit}
+                          onClick={handleSaveAndSubmitClick}
                           disabled={blocked}
                         >
                           {submitting ? "Submitting..." : "🚀 Save & Submit"}
@@ -1011,6 +1006,15 @@ export default function EditPaymentRequest() {
             </div>
           </div>
         </div>
+        {showCycleModal && (
+          <PaymentCycleModal
+            cycle={cycle}
+            loading={cycleLoading}
+            submitting={submitting}
+            onConfirm={handleSubmit}
+            onCancel={() => setShowCycleModal(false)}
+          />
+        )}
       </main>
     </div>
   );

@@ -113,6 +113,8 @@ const startServer = async () => {
     require("./middleware/auth").authenticate,
     require("./routes/expenses"),
   );
+  app.use("/api/invoices", require("./routes/invoices"));
+  app.use("/api/payment-cycle", require("./routes/paymentCycle")); // ← ADD
 
   const { initSLAScheduler } = require("./jobs/slaScheduler");
   await initSLAScheduler();

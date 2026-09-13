@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
+import { PaymentCycleIndicator } from "../components/PaymentCycleWidgets.jsx";
 
 // Indian short-scale money. Full precision stays available in the
 // tooltip (title attribute) on each card.
@@ -231,6 +232,9 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+
+        {/* ── Payment Cycle (all roles) ────────────────── */}
+        <PaymentCycleIndicator variant="ribbon" />
 
         {/* ── Invoice Processing Stats ─────────────────── */}
         <div style={S.sectionHeader}>
@@ -857,4 +861,11 @@ const S = {
 
   // Quick actions
   quickGrid: { display: "flex", gap: 12, flexWrap: "wrap" },
+
+  cycleRow: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(300px, 420px))",
+    gap: 16,
+    marginBottom: 18,
+  },
 };
