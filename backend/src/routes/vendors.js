@@ -41,7 +41,7 @@ router.delete(
 
 router.patch(
   "/:id/submit",
-  roleGuard(ROLES.BRANCH_USER, ROLES.SUPER_ADMIN),
+  roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
   ctrl.submitVendor,
 );
 router.patch(
