@@ -257,19 +257,25 @@ exports.approveInvoice = async (req, res) => {
       "branch vendor createdBy",
     );
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+
     const previousStatus = invoice.status;
 
-    // ✅ Handle partner-skipped invoices — accounts can act on Submitted directly
+    // Declared at function scope so the logAction call at the end can always
+    // read them, including on approvals that never reach the cluster-head
+    // stage. Both stay null for those.
+    let assignedCycleBefore = null;
+    let assignedCycle = null;
+
     // ✅ Handle partner-skipped invoices — accounts can act on Submitted directly
     const partnerSkipped =
       invoice.partnerSkipped && invoice.status === INVOICE_STATUS.SUBMITTED;
     const normalTurn = canActOnInvoice(req.user.role, invoice.status);
 
     if (!normalTurn && !partnerSkipped) {
-      const step = getWorkflowStep(invoice.status);
+      const blockingStep = getWorkflowStep(invoice.status);
       return res.status(403).json({
-        message: step
-          ? `Not your turn. Awaiting: ${step.actingRole.replace(/_/g, " ")}`
+        message: blockingStep
+          ? `Not your turn. Awaiting: ${blockingStep.actingRole.replace(/_/g, " ")}`
           : `Invoice status "${invoice.status}" does not require approval`,
       });
     }
@@ -278,10 +284,18 @@ exports.approveInvoice = async (req, res) => {
     const step = partnerSkipped
       ? {
           label: "Accounts Approval (Partner Skipped)",
-          nextStatus: "Accounts Approved",
+          nextStatus: INVOICE_STATUS.ACCOUNTS_APPROVED,
           nextStage: "cluster_head",
         }
       : getWorkflowStep(invoice.status);
+
+    if (!step) {
+      return res.status(400).json({
+        message: `Invoice status "${invoice.status}" has no approval step`,
+      });
+    }
+
+    const isFinalApproval = step.nextStatus === INVOICE_STATUS.CLUSTER_APPROVED;
 
     // ✅ Accounts must provide TDS % when approving at their stage
     if (req.user.role === ROLES.ACCOUNTS) {
@@ -300,18 +314,37 @@ exports.approveInvoice = async (req, res) => {
           message: "TDS percentage must be between 0 and 100",
         });
       }
-      // Recalculate TDS amount and net payable based on base amount
-      // AFTER
+      // Recalculate TDS amount and net payable from the base amount.
+      // Recomputed, never decremented, so a repeat pass cannot compound it.
       invoice.tdsPercentage = tds;
-      invoice.tdsAmount = Math.round((invoice.amount * tds) / 100); // ✅ nearest integer
+      invoice.tdsAmount = Math.round((invoice.amount * tds) / 100);
       invoice.netPayable = parseFloat(
         (
           invoice.amount +
           (invoice.gstAmount || 0) +
-          (invoice.roundOff || 0) - // ✅ include round-off (from earlier change)
+          (invoice.roundOff || 0) -
           invoice.tdsAmount
         ).toFixed(2),
       );
+    }
+
+    // ── Payment cycle ──────────────────────────────────────
+    // Assigned BEFORE the save, so the status change and the cycle commit
+    // together in a single document write. Setting it after the save left a
+    // window where a failure downstream stranded the invoice at
+    // "Cluster Head Approved" with no cycle and no payment record.
+    if (isFinalApproval) {
+      assignedCycleBefore = invoice.paymentCycle?.assigned
+        ? { ...invoice.paymentCycle.assigned }
+        : null;
+
+      const approvedAt = new Date();
+      assignedCycle = resolvePaymentCycle(approvedAt);
+
+      invoice.paymentCycle = invoice.paymentCycle || {};
+      invoice.paymentCycle.assigned = toStoredShape(assignedCycle, {
+        recordedAt: approvedAt,
+      });
     }
 
     invoice.status = step.nextStatus;
@@ -324,48 +357,39 @@ exports.approveInvoice = async (req, res) => {
       actionAt: new Date(),
     });
 
+    // Single atomic write: status, stage, history, TDS and payment cycle.
     await invoice.save();
 
     // ✅ If Cluster Head approves — invoice processing COMPLETE
-    // Create a PaymentProcessing record automatically in 'Payment Pending' state
-    if (step.nextStatus === "Cluster Head Approved") {
-      // ── Payment cycle (assigned) ─────────────────────────
-      // This is the moment the cycle is fixed. Written unconditionally:
-      // if an invoice is rejected and later re-approved, the LATER
-      // approval governs payment.
-      const approvedAt = new Date();
-      const cycle = resolvePaymentCycle(approvedAt);
+    if (isFinalApproval) {
+      const PaymentProcessing = require("../models/PaymentProcessing");
 
-      assignedCycleBefore = invoice.paymentCycle?.assigned
-        ? { ...invoice.paymentCycle.assigned }
+      // Idempotent: if a payment record already exists for this invoice, a
+      // previous attempt got this far. Reuse it rather than creating a
+      // duplicate the Accounts team would have to reconcile by hand.
+      let payment = invoice.paymentRequest
+        ? await PaymentProcessing.findById(invoice.paymentRequest)
         : null;
 
-      invoice.paymentCycle = invoice.paymentCycle || {};
-      invoice.paymentCycle.assigned = toStoredShape(cycle, {
-        recordedAt: approvedAt,
-      });
+      if (!payment) {
+        payment = await PaymentProcessing.create({
+          invoiceRequest: invoice._id,
+          branch: invoice.branch._id || invoice.branch,
+          vendor: invoice.vendor._id || invoice.vendor,
+          totalAmount: invoice.netPayable,
+          paidAmount: 0,
+          remainingAmount: invoice.netPayable,
+          status: "Payment Pending",
+          currentStage: "accounts",
+          raisedBy: invoice.createdBy._id || invoice.createdBy,
+          scheduledDate: assignedCycle.paymentDate,
+        });
 
-      const PaymentProcessing = require("../models/PaymentProcessing");
-      const payment = await PaymentProcessing.create({
-        invoiceRequest: invoice._id,
-        branch: invoice.branch._id || invoice.branch,
-        vendor: invoice.vendor._id || invoice.vendor,
-        totalAmount: invoice.netPayable,
-        paymentAmount: invoice.netPayable,
-        paidAmount: 0,
-        remainingAmount: invoice.netPayable,
-        status: "Payment Pending",
-        currentStage: "accounts", // ✅ was "branch" — now accounts handles it
-        raisedBy: invoice.createdBy._id || invoice.createdBy,
-        scheduledDate: cycle.paymentDate,
-      });
+        invoice.paymentRequest = payment._id;
+        await invoice.save();
+      }
 
-      // Link payment back to invoice
-      invoice.paymentRequest = payment._id;
-      await invoice.save();
-
-      // Notify account user that invoice is fully approved
-      // AFTER
+      // Notify the originator — including which cycle they landed in
       if (invoice.createdBy?.email && invoice.createdBy?.status === "active") {
         await sendNotificationEmail(
           invoice.createdBy.email,
@@ -375,7 +399,7 @@ exports.approveInvoice = async (req, res) => {
            <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;margin-top:12px;">
              <div style="font-size:13px;color:#0f766e;font-weight:600;">Payment Cycle</div>
              <div style="font-size:15px;color:#0f172a;font-weight:700;margin-top:4px;">
-               ${cycle.cycleLabel} &middot; ${cycle.paymentDateLabel}
+               ${assignedCycle.cycleLabel} &middot; ${assignedCycle.paymentDateLabel}
              </div>
              <div style="font-size:12px;color:#64748b;margin-top:6px;">
                If this date falls on a Sunday or a bank holiday, the payment will be
@@ -392,9 +416,8 @@ exports.approveInvoice = async (req, res) => {
         const clusterHeadName =
           req.user.name || req.user.email || "Cluster Head";
         const approvalDate = new Date().toLocaleDateString("en-GB");
-        const poNumber = invoice.requestId; // system reference — see note below
+        const poNumber = invoice.requestId;
 
-        // Attach the approved PO document, falling back to the invoice file
         const poDoc =
           invoice.attachments?.find((a) => a.type === "po") ||
           invoice.attachments?.find((a) => a.type === "invoice");
@@ -434,7 +457,6 @@ exports.approveInvoice = async (req, res) => {
       }
 
       await completeSLATracking(invoice._id);
-      // AFTER
     } else {
       // Notify next role
       await startSLATracking(invoice._id, step.nextStatus);
@@ -466,26 +488,35 @@ exports.approveInvoice = async (req, res) => {
       }
     }
 
-    await logAction({
-      userId: req.user._id,
-      action: "APPROVE_INVOICE",
-      module: "Invoice",
-      targetDoc: invoice,
-      statusFrom: previousStatus,
-      statusTo: invoice.status,
-      reason: req.body.remarks,
-      oldValue: assignedCycleBefore
-        ? { paymentCycle: assignedCycleBefore }
-        : undefined,
-      newValue: invoice.paymentCycle?.assigned
-        ? { paymentCycle: invoice.paymentCycle.assigned }
-        : undefined,
-      req,
-    });
+    // The approval is already committed by this point. Nothing below may be
+    // allowed to turn a successful write into a 500 — that is exactly what
+    // produced the "assignedCycleBefore is not defined" banner on an invoice
+    // that had in fact been approved.
+    try {
+      await logAction({
+        userId: req.user._id,
+        action: "APPROVE_INVOICE",
+        module: "Invoice",
+        targetDoc: invoice,
+        statusFrom: previousStatus,
+        statusTo: invoice.status,
+        reason: remarks,
+        oldValue: assignedCycleBefore
+          ? { paymentCycle: assignedCycleBefore }
+          : undefined,
+        newValue: invoice.paymentCycle?.assigned
+          ? { paymentCycle: invoice.paymentCycle.assigned }
+          : undefined,
+        req,
+      });
+    } catch (auditErr) {
+      console.error("Approval audit log failed:", auditErr);
+    }
+
     res.json(invoice);
   } catch (err) {
-    console.error("approveInvoice error:", err); // ← add this
-    res.status(500).json({ message: err.message });
+    console.error("approveInvoice error:", err);
+    res.status(500).json({ message: "Approval failed. Please try again." });
   }
 };
 
