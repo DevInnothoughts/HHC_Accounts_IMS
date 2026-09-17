@@ -287,6 +287,23 @@ export default function EditPaymentRequest() {
     setShowCycleModal(true);
   };
 
+  // ── Actual save + submit (runs after user confirms the payment-cycle popup)
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    try {
+      await api.put(`/invoices/${id}`, form);
+      await api.patch(`/invoices/${id}/submit`);
+      setShowCycleModal(false);
+      setSuccess("Request updated and submitted successfully!");
+      setTimeout(() => navigate(`/payments/${id}`), 1800);
+    } catch (err) {
+      setShowCycleModal(false);
+      setErrors({ submit: err.response?.data?.message || "Submit failed" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   // ✅ Re-fetch attachments from server after upload/delete
   const handleAttachmentUpdate = async () => {
     try {
