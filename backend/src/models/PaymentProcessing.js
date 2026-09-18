@@ -124,7 +124,8 @@ paymentProcessingSchema.pre("save", async function (next) {
     this.paymentId = `PAY-${String(seq).padStart(6, "0")}`;
   }
   // Auto-update remaining amount
-  this.remainingAmount = this.totalAmount - (this.paidAmount || 0);
+  this.remainingAmount =
+    Math.round((this.totalAmount - (this.paidAmount || 0)) * 100) / 100;
   next();
 });
 

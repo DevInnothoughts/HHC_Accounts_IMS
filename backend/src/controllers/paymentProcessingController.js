@@ -1275,115 +1275,312 @@ exports.bulkGenerateFedOneExcel = async (req, res) => {
   }
 };
 
-// POST /api/payments/:id/utr
-// Body: { utrNumber }
-exports.recordUTR = async (req, res) => {
+// ============================================================
+// UTR RECORDING
+// ------------------------------------------------------------
+// Single entry (PATCH /:id/utr) and bulk entry (PATCH /bulk-utr)
+// share one core — applyUtrToPayment — so eligibility, the amount
+// maths, the status transition and the audit trail cannot drift
+// apart between the two screens.
+// ============================================================
+
+// A UTR may only be posted from these states. The single-payment screen
+// keeps both, as it always has — Accounts sometimes pay one invoice off
+// the approval directly, without producing a bank file for it.
+const UTR_RECORDABLE_STATUSES = [
+  PAYMENT_STATUS.EXCEL_GENERATED,
+  PAYMENT_STATUS.ACCOUNTS_APPROVED,
+];
+
+// Bulk entry is stricter: the Excel IS the bank batch. A payment with no
+// bank file was never in the batch the operator is keying UTRs from, so
+// offering it in the grid would only invite a UTR being typed against a
+// payment the bank never saw.
+const BULK_UTR_RECORDABLE_STATUSES = [PAYMENT_STATUS.EXCEL_GENERATED];
+
+// Populate set every UTR path needs: branch scoping, the email body
+// and the audit label all read from it.
+const UTR_POPULATE = [
+  { path: "invoiceRequest", select: "requestId invoiceNumber netPayable" },
+  { path: "vendor", select: "vendorName" },
+  { path: "branch", select: "name code bankAccounts" },
+  { path: "raisedBy", select: "email name status" },
+];
+
+// One bank batch is a few hundred rows at most. The caps stop a
+// hand-crafted payload from turning one request into an unbounded
+// write loop.
+const MAX_BULK_UTR_ENTRIES = 500;
+const MAX_UTR_CANDIDATES = 1000;
+
+// Money is stored as a JS float (known tech debt — see paidAmount /
+// installment amounts). Rounding to paise at the settlement boundary
+// stops 1e-10 drift from leaving a fully settled invoice stuck on
+// "Partially Paid" forever.
+const toPaise = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+// Payment ids are stored exactly as they are printed (PAY-000123,
+// PAY-000123-2). Only case and stray whitespace are forgiven, so the
+// lookup stays an exact, indexed match.
+const cleanRefInput = (v) =>
+  String(v ?? "")
+    .trim()
+    .toUpperCase();
+
+// getPayments already restricts these roles to their mapped branches,
+// so a payment outside that set is only reachable by guessing an id.
+// Posting a UTR moves money in the ledger, so it is checked here too.
+const BRANCH_SCOPED_ROLES = [
+  ROLES.BRANCH_USER,
+  ROLES.BRANCH_PARTNER,
+  ROLES.ACCOUNTS,
+  ROLES.CLUSTER_HEAD,
+];
+
+const isPaymentInScope = (user, payment) => {
+  if (!BRANCH_SCOPED_ROLES.includes(user.role)) return true;
+  const branchId = String(payment.branch?._id || payment.branch || "");
+  return (user.branches || []).some(
+    (b) => String(b?._id || b) === branchId && branchId,
+  );
+};
+
+// A UTR is evidence money has already left the account, so a value date
+// in the future is always a typo. Tomorrow's date is allowed as the
+// boundary because the server may sit a timezone behind the branch.
+const parseDateOrNull = (value) => {
+  if (!value) return { ok: true, date: null };
+  const date = new Date(value);
+  if (isNaN(date.getTime()))
+    return { ok: false, date: null, message: "Invalid payment date" };
+
+  const limit = new Date();
+  limit.setDate(limit.getDate() + 1);
+  if (date > limit)
+    return {
+      ok: false,
+      date: null,
+      message: "Payment date cannot be in the future",
+    };
+
+  return { ok: true, date };
+};
+
+// ── Core: apply one UTR to one payment ─────────────────────
+// Mutates and saves the document, then returns a plain result. No HTTP
+// concerns, so the bulk path can collect per-row outcomes instead of
+// aborting a whole batch on the first bad row.
+const applyUtrToPayment = async (
+  payment,
+  {
+    utrNumber,
+    paymentDate,
+    installmentRef,
+    installmentIndex,
+    userId,
+    source,
+    allowedStatuses = UTR_RECORDABLE_STATUSES,
+  },
+) => {
+  const utr = String(utrNumber || "")
+    .trim()
+    .toUpperCase();
+  if (!utr) return { ok: false, message: "UTR number is required" };
+
+  if (!allowedStatuses.includes(payment.status)) {
+    return {
+      ok: false,
+      message:
+        source === "bulk"
+          ? `Bulk UTR needs the bank Excel generated first — this payment is "${payment.status}"`
+          : `A UTR can only be recorded once a payment is approved by Accounts — this one is "${payment.status}"`,
+    };
+  }
+
+  // ── Pick the installment ──────────────────────────────────
+  // installmentRef (the printed id, PAY-000123-2) is preferred over a
+  // bare array index. A screen can sit open while the payment is
+  // rejected and re-raised, and by then index 0 is a different, abandoned
+  // installment — the id still names the one the operator was looking at.
+  let idx = -1;
+  if (installmentRef) {
+    const wanted = cleanRefInput(installmentRef);
+    idx = payment.installments.findIndex(
+      (inst) => cleanRefInput(inst?.paymentId) === wanted,
+    );
+    if (idx < 0)
+      return {
+        ok: false,
+        message: `Installment ${installmentRef} is no longer on this payment — reopen the screen and try again`,
+      };
+  } else if (installmentIndex !== undefined && installmentIndex !== null) {
+    idx = Number(installmentIndex);
+    if (!Number.isInteger(idx))
+      return { ok: false, message: "Invalid installment reference" };
+  } else {
+    idx = payment.installments.length - 1;
+  }
+
+  if (idx < 0 || idx >= payment.installments.length) {
+    return {
+      ok: false,
+      message: "No open installment to record a UTR against",
+    };
+  }
+
+  const installment = payment.installments[idx];
+  if (!installment)
+    return {
+      ok: false,
+      message: "No open installment to record a UTR against",
+    };
+
+  // paidAmount is incremented, not recomputed, so re-posting the same
+  // installment would silently double-credit it. The status guard above
+  // blocks the ordinary replay; this catches an explicit reference aimed
+  // at an installment that was already settled.
+  if (installment.utrNumber) {
+    return {
+      ok: false,
+      message: `${installment.paymentId || `Installment ${idx + 1}`} already carries UTR ${installment.utrNumber}`,
+    };
+  }
+
+  // Installments are only ever created as "Raised" and marked "Processed"
+  // here — the approve / excel / reject handlers move the PARENT status
+  // only. So the parent status is what says a UTR is due, and these two
+  // checks say whether it is due against THIS installment.
+  if (["Processed", "Rejected"].includes(installment.status)) {
+    return {
+      ok: false,
+      message: `${installment.paymentId || `Installment ${idx + 1}`} is "${installment.status}" — a UTR cannot be recorded against it`,
+    };
+  }
+
+  // Only the newest installment is payable. Partial payments always append,
+  // so an earlier installment either already carries its UTR or was
+  // abandoned when the payment was rejected and re-raised. Without this a
+  // screen left open across a re-raise would book the money against the
+  // abandoned row and leave the live one open to be paid twice.
+  if (idx !== payment.installments.length - 1) {
+    return {
+      ok: false,
+      message: `${installment.paymentId || `Installment ${idx + 1}`} has been superseded by a newer installment — reopen the screen and try again`,
+    };
+  }
+
+  const installmentAmount = installment.amount || 0;
+  if (!(installmentAmount > 0))
+    return { ok: false, message: "Installment has no amount to settle" };
+
+  // Never let a payment be credited beyond its own invoice value.
+  if (
+    toPaise((payment.paidAmount || 0) + installmentAmount) -
+      payment.totalAmount >
+    0.009
+  ) {
+    return {
+      ok: false,
+      message: "Recording this would pay more than the invoice total",
+    };
+  }
+
+  const recordedAt = new Date();
+  const statusFrom = payment.status;
+  const historyEntry = {
+    stage: "UTR Recorded",
+    approvedBy: userId,
+    action: "approved",
+    remarks: `UTR ${utr} recorded${source === "bulk" ? " (bulk entry)" : ""}`,
+    actionAt: recordedAt,
+  };
+
+  installment.utrNumber = utr;
+  installment.utrRecordedAt = recordedAt;
+  installment.utrRecordedBy = userId;
+  // Only overwrite the value date when one was actually supplied — a blank
+  // cell must not erase a date already on the record.
+  if (paymentDate) installment.paymentDate = paymentDate;
+  installment.status = "Processed";
+  installment.approvalHistory.push(historyEntry);
+
+  payment.paidAmount = toPaise((payment.paidAmount || 0) + installmentAmount);
+  payment.remainingAmount = toPaise(payment.totalAmount - payment.paidAmount);
+  payment.status =
+    payment.remainingAmount <= 0
+      ? PAYMENT_STATUS.FULLY_PAID
+      : PAYMENT_STATUS.PARTIALLY_PAID;
+
+  // Top-level mirror of the latest installment, kept for the list views
+  // and reports that still read these fields.
+  payment.utrNumber = utr;
+  payment.utrRecordedAt = recordedAt;
+  payment.utrRecordedBy = userId;
+  if (paymentDate) payment.paymentDate = paymentDate;
+
+  // Audit parity with approve / reject: the state change is recorded on
+  // the document itself, not only in the AuditLog collection.
+  payment.approvalHistory.push(historyEntry);
+
+  await payment.save();
+
+  return {
+    ok: true,
+    utr,
+    installmentAmount,
+    installmentId: installment.paymentId || null,
+    statusFrom,
+    statusTo: payment.status,
+  };
+};
+
+// ── Notify raiser + Branch Partner + Cluster Head ──────────
+// Never throws: a dead SMTP must not fail a recorded payment.
+const sendUtrNotification = async (payment, { utr, installmentAmount }) => {
   try {
-    const { utrNumber, installmentIndex, paymentDate } = req.body;
-    if (!utrNumber?.trim())
-      return res.status(400).json({ message: "UTR number is required" });
+    const branchId = payment.branch?._id || payment.branch;
 
-    // Payment (value) date — validate if provided
-    let parsedPaymentDate = null;
-    if (paymentDate) {
-      parsedPaymentDate = new Date(paymentDate);
-      if (isNaN(parsedPaymentDate.getTime())) {
-        return res.status(400).json({ message: "Invalid payment date" });
-      }
+    const approvers = await User.find({
+      role: { $in: [ROLES.BRANCH_PARTNER, ROLES.CLUSTER_HEAD] },
+      status: "active",
+      branches: branchId, // only approvers mapped to this payment's branch
+    }).select("email name role");
+
+    // Raiser goes on To:, partner + cluster head on Cc:. De-duped, case-insensitive.
+    const seen = new Set();
+    const recipients = [];
+    const raiserEmail =
+      payment.raisedBy?.status === "active" ? payment.raisedBy.email : null;
+
+    for (const raw of [raiserEmail, ...approvers.map((u) => u.email)]) {
+      const email = raw?.trim();
+      if (!email) continue;
+      const key = email.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      recipients.push(email);
     }
 
-    const payment = await PaymentProcessing.findById(req.params.id)
-      .populate("invoiceRequest", "requestId netPayable")
-      .populate("vendor", "vendorName")
-      .populate("branch", "name code bankAccounts") // ← ADD: needed for scoping + email body
-      .populate("raisedBy", "email name status");
+    if (!recipients.length) return;
 
-    if (!payment) return res.status(404).json({ message: "Payment not found" });
+    const [to, ...cc] = recipients;
+    const invoice = payment.invoiceRequest;
+    const paidOn = (
+      payment.paymentDate ||
+      payment.utrRecordedAt ||
+      new Date()
+    ).toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+    const row = (label, value, color) =>
+      `<tr><td style="padding:6px;color:#666;">${label}</td><td style="padding:6px;font-weight:600;${color ? `color:${color};` : ""}">${value}</td></tr>`;
 
-    if (!["Excel Generated", "Accounts Approved"].includes(payment.status)) {
-      return res.status(400).json({
-        message: "UTR can only be recorded after Excel is generated",
-      });
-    }
-
-    const utr = utrNumber.trim().toUpperCase();
-
-    // ✅ Update the latest installment
-    const latestIdx =
-      installmentIndex !== undefined
-        ? installmentIndex
-        : payment.installments.length - 1;
-
-    if (payment.installments[latestIdx]) {
-      payment.installments[latestIdx].utrNumber = utr;
-      payment.installments[latestIdx].utrRecordedAt = new Date();
-      payment.installments[latestIdx].utrRecordedBy = req.user._id;
-      payment.installments[latestIdx].paymentDate = parsedPaymentDate;
-      payment.installments[latestIdx].status = "Processed";
-    }
-
-    // ✅ Update paid amount
-    const installmentAmount = payment.installments[latestIdx]?.amount || 0;
-    payment.paidAmount = (payment.paidAmount || 0) + installmentAmount;
-    payment.remainingAmount = payment.totalAmount - payment.paidAmount;
-
-    // ✅ Determine overall status
-    if (payment.remainingAmount <= 0) {
-      payment.status = "Fully Paid";
-    } else {
-      payment.status = "Partially Paid";
-    }
-
-    // ✅ Legacy UTR fields
-    payment.utrNumber = utr;
-    payment.utrRecordedAt = new Date();
-    payment.utrRecordedBy = req.user._id;
-    payment.paymentDate = parsedPaymentDate;
-
-    await payment.save();
-
-    // ── Notify raiser + Branch Partner + Cluster Head ──────────
-    try {
-      const branchId = payment.branch?._id || payment.branch;
-
-      const approvers = await User.find({
-        role: { $in: [ROLES.BRANCH_PARTNER, ROLES.CLUSTER_HEAD] },
-        status: "active",
-        branches: branchId, // only approvers mapped to this payment's branch
-      }).select("email name role");
-
-      // Raiser goes on To:, partner + cluster head on Cc:. De-duped, case-insensitive.
-      const seen = new Set();
-      const recipients = [];
-      const raiserEmail =
-        payment.raisedBy?.status === "active" ? payment.raisedBy.email : null;
-
-      for (const raw of [raiserEmail, ...approvers.map((u) => u.email)]) {
-        const email = raw?.trim();
-        if (!email) continue;
-        const key = email.toLowerCase();
-        if (seen.has(key)) continue;
-        seen.add(key);
-        recipients.push(email);
-      }
-
-      if (recipients.length) {
-        const [to, ...cc] = recipients;
-        const invoice = payment.invoiceRequest;
-        const paidOn = (
-          payment.paymentDate || payment.utrRecordedAt
-        ).toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "short",
-          year: "numeric",
-        });
-        const row = (label, value, color) =>
-          `<tr><td style="padding:6px;color:#666;">${label}</td><td style="padding:6px;font-weight:600;${color ? `color:${color};` : ""}">${value}</td></tr>`;
-
-        await sendNotificationEmail(
-          to,
-          `✅ Payment ${payment.status}: ${payment.paymentId}`,
-          `
+    await sendNotificationEmail(
+      to,
+      `✅ Payment ${payment.status}: ${payment.paymentId}`,
+      `
           <p>Payment <strong>${payment.paymentId}</strong> has been processed by the Accounts team and the UTR has been recorded.</p>
           <table style="width:100%;border-collapse:collapse;margin-top:12px;">
             ${row("UTR Number", utr, "#16a34a")}
@@ -1402,25 +1599,431 @@ exports.recordUTR = async (req, res) => {
           }
           <p style="color:#94a3b8;font-size:12px;margin-top:16px;">This is an automated confirmation — no action is required.</p>
         `,
-          cc.length ? { cc } : {},
-        );
-      }
-    } catch (mailErr) {
-      console.error("UTR notification error:", mailErr.message);
+      cc.length ? { cc } : {},
+    );
+  } catch (mailErr) {
+    console.error("UTR notification error:", mailErr.message);
+  }
+};
+
+// ── Bulk: one digest per branch, not one mail per invoice ──
+// A 200-invoice batch for one branch would otherwise put 200 near-identical
+// mails in the same partner's inbox. Recipients are resolved once per branch
+// and the payments are listed in a single table. Never throws.
+const sendBulkUtrDigest = async (posted) => {
+  try {
+    // branchId -> { branch, rows[], raiserEmails:Set }
+    const byBranch = new Map();
+    for (const [payment, result] of posted) {
+      const branchId = String(payment.branch?._id || payment.branch || "none");
+      if (!byBranch.has(branchId))
+        byBranch.set(branchId, {
+          branch: payment.branch,
+          rows: [],
+          raiserEmails: new Set(),
+        });
+      const group = byBranch.get(branchId);
+      group.rows.push({ payment, result });
+      if (payment.raisedBy?.status === "active" && payment.raisedBy.email)
+        group.raiserEmails.add(payment.raisedBy.email.trim());
     }
+
+    for (const [branchId, group] of byBranch) {
+      const approvers = mongoose.isValidObjectId(branchId)
+        ? await User.find({
+            role: { $in: [ROLES.BRANCH_PARTNER, ROLES.CLUSTER_HEAD] },
+            status: "active",
+            branches: branchId,
+          }).select("email")
+        : [];
+
+      const seen = new Set();
+      const recipients = [];
+      for (const raw of [
+        ...group.raiserEmails,
+        ...approvers.map((u) => u.email),
+      ]) {
+        const email = raw?.trim();
+        if (!email) continue;
+        const key = email.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        recipients.push(email);
+      }
+      if (!recipients.length) continue;
+
+      const [to, ...cc] = recipients;
+      const totalPaid = group.rows.reduce(
+        (sum, r) => sum + (r.result.installmentAmount || 0),
+        0,
+      );
+
+      const body = group.rows
+        .map(
+          ({ payment, result }) => `
+            <tr>
+              <td style="padding:6px;border-top:1px solid #eee;">${payment.invoiceRequest?.requestId || "—"}</td>
+              <td style="padding:6px;border-top:1px solid #eee;">${payment.vendor?.vendorName || "—"}</td>
+              <td style="padding:6px;border-top:1px solid #eee;text-align:right;">₹${(result.installmentAmount || 0).toLocaleString("en-IN")}</td>
+              <td style="padding:6px;border-top:1px solid #eee;font-family:monospace;color:#16a34a;">${result.utr}</td>
+              <td style="padding:6px;border-top:1px solid #eee;">${payment.status}</td>
+            </tr>`,
+        )
+        .join("");
+
+      await sendNotificationEmail(
+        to,
+        `✅ ${group.rows.length} payment${group.rows.length === 1 ? "" : "s"} processed — ${group.branch?.name || "your branch"}`,
+        `
+          <p>The Accounts team has recorded UTRs for the following payment${group.rows.length === 1 ? "" : "s"}.</p>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:12px;">
+            <thead>
+              <tr style="background:#f8fafc;text-align:left;">
+                <th style="padding:6px;">Invoice</th>
+                <th style="padding:6px;">Vendor</th>
+                <th style="padding:6px;text-align:right;">Amount</th>
+                <th style="padding:6px;">UTR</th>
+                <th style="padding:6px;">Status</th>
+              </tr>
+            </thead>
+            <tbody>${body}</tbody>
+          </table>
+          <p style="margin-top:12px;font-weight:700;">Total recorded: ₹${totalPaid.toLocaleString("en-IN")}</p>
+          <p style="color:#94a3b8;font-size:12px;margin-top:16px;">This is an automated confirmation — no action is required.</p>
+        `,
+        cc.length ? { cc } : {},
+      );
+    }
+  } catch (mailErr) {
+    console.error("Bulk UTR digest error:", mailErr.message);
+  }
+};
+
+// ── PATCH /api/payments/:id/utr ────────────────────────────
+// Body: { utrNumber, paymentDate?, installmentIndex? }
+exports.recordUTR = async (req, res) => {
+  try {
+    const { utrNumber, installmentRef, installmentIndex, paymentDate } =
+      req.body;
+    if (!utrNumber?.trim())
+      return res.status(400).json({ message: "UTR number is required" });
+
+    const parsed = parseDateOrNull(paymentDate);
+    if (!parsed.ok) return res.status(400).json({ message: parsed.message });
+
+    const payment = await PaymentProcessing.findById(req.params.id).populate(
+      UTR_POPULATE,
+    );
+
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    if (!isPaymentInScope(req.user, payment))
+      return res
+        .status(403)
+        .json({ message: "This payment belongs to another branch" });
+
+    const result = await applyUtrToPayment(payment, {
+      utrNumber,
+      paymentDate: parsed.date,
+      installmentRef,
+      installmentIndex,
+      userId: req.user._id,
+      source: "single",
+    });
+
+    if (!result.ok) return res.status(400).json({ message: result.message });
+
+    await sendUtrNotification(payment, result);
 
     await logAction({
       userId: req.user._id,
       action: "RECORD_UTR",
       module: "Payment",
-      targetId: payment._id,
-      newValue: { utrNumber: utr, installmentAmount },
+      targetDoc: payment,
+      statusFrom: result.statusFrom,
+      statusTo: result.statusTo,
+      amount: result.installmentAmount,
+      newValue: {
+        utrNumber: result.utr,
+        installmentId: result.installmentId,
+        installmentAmount: result.installmentAmount,
+      },
       req,
     });
 
     res.json(payment);
   } catch (err) {
     console.error("UTR record error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ── GET /api/payments/awaiting-utr ─────────────────────────
+// Every payment a UTR can still be posted against, in one lean response,
+// so the bulk screen can show the whole outstanding set rather than only
+// the page that happened to be on screen.
+exports.getPaymentsAwaitingUTR = async (req, res) => {
+  try {
+    // This endpoint feeds the bulk screen only, so it uses the stricter set.
+    const query = { status: { $in: BULK_UTR_RECORDABLE_STATUSES } };
+
+    if (BRANCH_SCOPED_ROLES.includes(req.user.role)) {
+      const assigned = (req.user.branches || []).map((b) => b?._id || b);
+      const picked = req.query.branch;
+      query.branch =
+        picked && assigned.some((a) => String(a) === String(picked))
+          ? picked
+          : { $in: assigned };
+    } else if (req.query.branch) {
+      query.branch = req.query.branch;
+    }
+
+    const total = await PaymentProcessing.countDocuments(query);
+
+    const payments = await PaymentProcessing.find(query)
+      .select(
+        "paymentId status paymentAmount totalAmount paidAmount remainingAmount scheduledDate installments invoiceRequest branch vendor",
+      )
+      .populate("invoiceRequest", "requestId invoiceNumber netPayable")
+      .populate("branch", "name code")
+      .populate("vendor", "vendorName companyName")
+      .sort({ createdAt: -1 })
+      .limit(MAX_UTR_CANDIDATES)
+      .lean();
+
+    // Only the open installment is exposed — that is the one a UTR lands on
+    // — identified by its printed id so the server can resolve it by name
+    // rather than by a position that may shift.
+    const rows = payments
+      // Legacy records predating the installments array have nothing for a
+      // UTR to land on, so listing them would only offer rows that always
+      // fail. They are still payable through the single-payment screen.
+      .filter((p) => (p.installments?.length || 0) > 0)
+      .map((p) => {
+        const idx = p.installments.length - 1;
+        const last = p.installments[idx];
+        return {
+          _id: p._id,
+          paymentId: p.paymentId,
+          status: p.status,
+          installmentIndex: idx,
+          installmentId: last?.paymentId || null,
+          amount: last?.amount ?? p.paymentAmount ?? 0,
+          scheduledDate: p.scheduledDate || last?.scheduledDate || null,
+          alreadyRecorded: Boolean(last?.utrNumber),
+          invoiceRequest: p.invoiceRequest,
+          branch: p.branch,
+          vendor: p.vendor,
+          references: [p.paymentId, last?.paymentId].filter(Boolean),
+        };
+      });
+
+    res.json({
+      payments: rows,
+      total,
+      returned: rows.length,
+      cap: MAX_UTR_CANDIDATES,
+      // Compare against what the query returned, not what survived the
+      // legacy filter — otherwise filtering one old record would claim the
+      // list had been cut short.
+      truncated:
+        payments.length >= MAX_UTR_CANDIDATES && total > payments.length,
+    });
+  } catch (err) {
+    console.error("Awaiting-UTR list error:", err);
+    res.status(500).json({ message: err.message });
+  }
+};
+
+// ── PATCH /api/payments/bulk-utr ───────────────────────────
+// Body: {
+//   entries: [{ _id? , reference?, utrNumber, paymentDate?, installmentRef? }],
+//   paymentDate?   // fallback value date for entries that omit their own
+// }
+//
+// Accounts release payments as one bank batch, then key the UTRs back in
+// off the statement, so each row is applied independently: a bad row is
+// reported and the rows around it still go through. Nothing is rolled
+// back, because a UTR that has already been posted is a fact about money
+// that moved — the batch reports per-row outcomes instead.
+exports.bulkRecordUTR = async (req, res) => {
+  try {
+    const { entries, paymentDate: fallbackDate } = req.body;
+
+    if (!Array.isArray(entries) || entries.length === 0)
+      return res.status(400).json({ message: "No UTR entries provided" });
+
+    if (entries.length > MAX_BULK_UTR_ENTRIES)
+      return res.status(400).json({
+        message: `Too many entries — send at most ${MAX_BULK_UTR_ENTRIES} at a time`,
+      });
+
+    const parsedFallback = parseDateOrNull(fallbackDate);
+    if (!parsedFallback.ok)
+      return res.status(400).json({ message: parsedFallback.message });
+
+    // ── Resolve references to ids in one query ────────────────
+    // The bulk screen posts each row with its _id, so that is the normal
+    // path. `reference` is accepted as a fallback for a caller that only
+    // has the printed id (PAY-000123 or its installment PAY-000123-2);
+    // it is an exact, indexed lookup — no full-collection scan.
+    //
+    // Only ids are resolved here, never documents. Each row re-reads its
+    // own payment at the moment it is applied (below), so a row cannot be
+    // judged against a snapshot that an earlier row in this same batch —
+    // or another user's approval or rejection mid-batch — has since moved on.
+    const refSet = new Set();
+    entries.forEach((entry) => {
+      const id = entry?._id || entry?.id;
+      if (id && mongoose.isValidObjectId(id)) return;
+      const ref = cleanRefInput(entry?.reference ?? entry?.paymentId);
+      if (ref) refSet.add(ref);
+    });
+
+    const idByRef = new Map();
+    if (refSet.size) {
+      const refs = [...refSet];
+      const found = await PaymentProcessing.find({
+        $or: [
+          { paymentId: { $in: refs } },
+          { "installments.paymentId": { $in: refs } },
+        ],
+      }).select("paymentId installments.paymentId");
+
+      for (const doc of found) {
+        const keys = new Set([doc.paymentId]);
+        (doc.installments || []).forEach((inst) => {
+          if (inst?.paymentId) keys.add(inst.paymentId);
+        });
+        for (const key of keys) {
+          if (key && refSet.has(key)) idByRef.set(key, String(doc._id));
+        }
+      }
+    }
+
+    const results = [];
+    const notifications = [];
+    let updated = 0;
+
+    for (let i = 0; i < entries.length; i++) {
+      const entry = entries[i] || {};
+      const label = String(
+        entry.reference || entry.paymentId || entry._id || `Row ${i + 1}`,
+      );
+      const record = (status, message, doc) =>
+        results.push({
+          index: i,
+          reference: label,
+          paymentId: doc?.paymentId || null,
+          status,
+          message,
+        });
+
+      const utr = String(entry.utrNumber || "").trim();
+      if (!utr) {
+        record("failed", "UTR number is missing");
+        continue;
+      }
+
+      const id = entry._id || entry.id;
+      const targetId =
+        id && mongoose.isValidObjectId(id)
+          ? String(id)
+          : idByRef.get(cleanRefInput(entry.reference ?? entry.paymentId));
+
+      // Re-read per row. This is what makes the batch safe: the same
+      // payment listed twice, or one approved away underneath us while
+      // earlier rows were being written, is judged on its current state.
+      const doc = targetId
+        ? await PaymentProcessing.findById(targetId).populate(UTR_POPULATE)
+        : null;
+
+      if (!doc) {
+        record("failed", "No payment awaiting a UTR matched this reference");
+        continue;
+      }
+
+      if (!isPaymentInScope(req.user, doc)) {
+        record("failed", "Payment belongs to another branch", doc);
+        continue;
+      }
+
+      const rowDate = parseDateOrNull(entry.paymentDate);
+      if (!rowDate.ok) {
+        record("failed", rowDate.message, doc);
+        continue;
+      }
+
+      try {
+        const result = await applyUtrToPayment(doc, {
+          utrNumber: utr,
+          paymentDate: rowDate.date || parsedFallback.date,
+          installmentRef: entry.installmentRef,
+          installmentIndex: entry.installmentIndex,
+          userId: req.user._id,
+          source: "bulk",
+          allowedStatuses: BULK_UTR_RECORDABLE_STATUSES,
+        });
+
+        if (!result.ok) {
+          // Already settled / wrong state — reported, not an error.
+          record("skipped", result.message, doc);
+          continue;
+        }
+
+        updated++;
+        record("success", `UTR ${result.utr} recorded`, doc);
+        notifications.push([doc, result]);
+
+        await logAction({
+          userId: req.user._id,
+          action: "RECORD_UTR",
+          module: "Payment",
+          targetDoc: doc,
+          statusFrom: result.statusFrom,
+          statusTo: result.statusTo,
+          amount: result.installmentAmount,
+          newValue: {
+            utrNumber: result.utr,
+            installmentId: result.installmentId,
+            installmentAmount: result.installmentAmount,
+            source: "bulk",
+          },
+          req,
+        });
+      } catch (err) {
+        console.error("Bulk UTR row error:", err);
+        record("failed", err.message || "Could not record this UTR", doc);
+      }
+    }
+
+    // Mail goes out after the writes, as one digest per branch rather than
+    // one mail per invoice. A slow or dead SMTP then delays the response
+    // instead of holding the batch half-written, and it stays a handful of
+    // sends however large the batch was.
+    await sendBulkUtrDigest(notifications);
+
+    const skipped = results.filter((r) => r.status === "skipped").length;
+    const failed = results.filter((r) => r.status === "failed").length;
+
+    await logAction({
+      userId: req.user._id,
+      action: "BULK_RECORD_UTR",
+      module: "Payment",
+      newValue: { requested: entries.length, updated, skipped, failed },
+      req,
+    });
+
+    res.json({
+      message: `${updated} of ${entries.length} payment${entries.length === 1 ? "" : "s"} updated`,
+      total: entries.length,
+      updated,
+      skipped,
+      failed,
+      results,
+    });
+  } catch (err) {
+    console.error("Bulk UTR error:", err);
     res.status(500).json({ message: err.message });
   }
 };

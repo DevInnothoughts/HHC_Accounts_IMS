@@ -1,10 +1,14 @@
 // ============================================================
-// FRONTEND: src/pages/PrimaryReports.jsx — NEW FILE
-// ------------------------------------------------------------
-// The three primary reports. Existing Reports.jsx is untouched and
-// stays available as the secondary volume/value view.
+// FRONTEND: src/pages/PrimaryReports.jsx
+// REPLACE THE WHOLE FILE.
+// Every patch from this conversation is already applied, once:
+//   · branch x stage matrix
+//   · branch-by-branch dropdowns
+//   · draft/filters split so only Apply fires a request
+//   · per-section Excel export
+//   · subtype register tab
 // ============================================================
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
@@ -63,21 +67,24 @@ const TABS = [
   ["subtype", "Subtype register"],
 ];
 
+const BLANK = {
+  from: "",
+  to: "",
+  branch: "",
+  expenseType: "",
+  expenseCategory: "",
+};
+
 export default function PrimaryReports() {
   const navigate = useNavigate();
   const [tab, setTab] = useState("invoice");
+
   // `draft` is what the inputs show; `filters` is what the request uses.
   // Nothing reloads until Apply copies one into the other — otherwise a
   // date picker fires a request for every year you scroll past.
-  const BLANK = {
-    from: "",
-    to: "",
-    branch: "",
-    expenseType: "",
-    expenseCategory: "",
-  };
   const [draft, setDraft] = useState(BLANK);
   const [filters, setFilters] = useState(BLANK);
+
   const [options, setOptions] = useState({ categories: [], branches: [] });
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(false);
@@ -106,6 +113,8 @@ export default function PrimaryReports() {
         expense: "expense-analysis",
       }[which];
 
+      // The subtype tab loads its own data from a different endpoint
+      // with its own filters, so there is nothing to fetch here.
       if (!endpoint) return;
 
       setLoading(true);
@@ -136,11 +145,14 @@ export default function PrimaryReports() {
     setFilters(BLANK);
   };
 
-  // Warn before running a query that returns nothing.
   const badRange = draft.from && draft.to && draft.from > draft.to;
   const dirty = JSON.stringify(draft) !== JSON.stringify(filters);
 
   const current = data[tab];
+  const branchName =
+    options.branches.find((b) => String(b._id) === filters.branch)?.name ||
+    null;
+  const metaFilters = { ...filters, branchName };
 
   return (
     <div style={S.layout}>
@@ -159,96 +171,93 @@ export default function PrimaryReports() {
           </button>
         </div>
 
-        {/* Filters */}
-        <div style={S.filterBar}>
-          <label style={S.field}>
-            <span style={S.fieldLabel}>From</span>
-            <input
-              type="date"
-              style={S.input}
-              value={draft.from}
-              onChange={set("from")}
-            />
-          </label>
-          <label style={S.field}>
-            <span style={S.fieldLabel}>To</span>
-            <input
-              type="date"
-              style={S.input}
-              value={draft.to}
-              onChange={set("to")}
-            />
-          </label>
-          <label style={S.field}>
-            <span style={S.fieldLabel}>Branch</span>
-            <select
-              style={S.input}
-              value={draft.branch}
-              onChange={set("branch")}
-            >
-              <option value="">All branches</option>
-              {options.branches.map((b) => (
-                <option key={b._id} value={b._id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label style={S.field}>
-            <span style={S.fieldLabel}>Expense type</span>
-            <select
-              style={S.input}
-              value={draft.expenseType}
-              onChange={set("expenseType")}
-            >
-              <option value="">Revenue and Capital</option>
-              <option value="Revenue">Revenue</option>
-              <option value="Capital">Capital</option>
-            </select>
-          </label>
-          <label style={S.field}>
-            <span style={S.fieldLabel}>Category</span>
-            <select
-              style={S.input}
-              value={draft.expenseCategory}
-              onChange={set("expenseCategory")}
-            >
-              <option value="">All categories</option>
-              {options.categories
-                .filter(
-                  (c) => !draft.expenseType || c.type === draft.expenseType,
-                )
-                .map((c) => (
-                  <option key={c._id} value={c._id}>
-                    {c.name} ({c.code})
-                    {c.status === "inactive" ? " — retired" : ""}
+        {/* Filters — the subtype tab carries its own, so hide these there */}
+        {tab !== "subtype" && (
+          <div style={S.filterBar}>
+            <Field label="From">
+              <input
+                type="date"
+                style={S.input}
+                value={draft.from}
+                onChange={set("from")}
+              />
+            </Field>
+            <Field label="To">
+              <input
+                type="date"
+                style={S.input}
+                value={draft.to}
+                onChange={set("to")}
+              />
+            </Field>
+            <Field label="Branch">
+              <select
+                style={S.input}
+                value={draft.branch}
+                onChange={set("branch")}
+              >
+                <option value="">All branches</option>
+                {options.branches.map((b) => (
+                  <option key={b._id} value={b._id}>
+                    {b.name}
                   </option>
                 ))}
-            </select>
-          </label>
-          <button
-            style={{
-              ...S.applyBtn,
-              opacity: badRange ? 0.5 : 1,
-              cursor: badRange ? "not-allowed" : "pointer",
-            }}
-            onClick={apply}
-            disabled={badRange}
-          >
-            {dirty ? "Apply changes" : "Apply"}
-          </button>
-          <button style={S.clearBtn} onClick={clear}>
-            Clear
-          </button>
-          {badRange && (
-            <span style={S.filterHint}>
-              The end date is before the start date.
-            </span>
-          )}
-          {dirty && !badRange && (
-            <span style={S.filterHint}>Not applied yet</span>
-          )}
-        </div>
+              </select>
+            </Field>
+            <Field label="Expense type">
+              <select
+                style={S.input}
+                value={draft.expenseType}
+                onChange={set("expenseType")}
+              >
+                <option value="">Revenue and Capital</option>
+                <option value="Revenue">Revenue</option>
+                <option value="Capital">Capital</option>
+              </select>
+            </Field>
+            <Field label="Category">
+              <select
+                style={S.input}
+                value={draft.expenseCategory}
+                onChange={set("expenseCategory")}
+              >
+                <option value="">All categories</option>
+                {options.categories
+                  .filter(
+                    (c) => !draft.expenseType || c.type === draft.expenseType,
+                  )
+                  .map((c) => (
+                    <option key={c._id} value={c._id}>
+                      {c.name} ({c.code})
+                      {c.status === "inactive" ? " — retired" : ""}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+            <button
+              style={{
+                ...S.applyBtn,
+                opacity: badRange ? 0.5 : 1,
+                cursor: badRange ? "not-allowed" : "pointer",
+              }}
+              onClick={apply}
+              disabled={badRange}
+            >
+              {dirty ? "Apply changes" : "Apply"}
+            </button>
+            <button style={S.clearBtn} onClick={clear}>
+              Clear
+            </button>
+            {badRange && (
+              <span style={S.filterHint}>
+                The end date is before the start date.
+              </span>
+            )}
+            {dirty && !badRange && (
+              <span style={S.filterHint}>Not applied yet</span>
+            )}
+          </div>
+        )}
 
         <div style={S.tabs}>
           {TABS.map(([k, l]) => (
@@ -264,35 +273,35 @@ export default function PrimaryReports() {
 
         {error && <div style={S.error}>{error}</div>}
 
-        {loading && !current ? (
+        {tab === "subtype" ? (
+          <SubtypeReport
+            branches={options.branches.map((b) => ({
+              branchId: b._id,
+              branchName: b.name,
+            }))}
+          />
+        ) : loading && !current ? (
           <div style={S.loading}>Loading…</div>
         ) : (
           <div
             style={{ opacity: loading ? 0.5 : 1, transition: "opacity .15s" }}
           >
             {tab === "invoice" && (
-              <DelayReport report={current} kind="invoice" />
-            )}
-            {tab === "payment" && (
-              <DelayReport report={current} kind="payment" />
-            )}
-            {tab === "expense" && <ExpenseReport report={current} />}
-            {tab === "subtype" && (
-              <SubtypeReport
-                branches={options.branches.map((b) => ({
-                  branchId: b._id,
-                  branchName: b.name,
-                }))}
+              <DelayReport
+                report={current}
+                kind="invoice"
+                filters={metaFilters}
               />
             )}
-            {tab === "invoice" && (
-              <DelayReport report={current} kind="invoice" filters={filters} />
-            )}
             {tab === "payment" && (
-              <DelayReport report={current} kind="payment" filters={filters} />
+              <DelayReport
+                report={current}
+                kind="payment"
+                filters={metaFilters}
+              />
             )}
             {tab === "expense" && (
-              <ExpenseReport report={current} filters={filters} />
+              <ExpenseReport report={current} filters={metaFilters} />
             )}
           </div>
         )}
@@ -301,9 +310,13 @@ export default function PrimaryReports() {
   );
 }
 
-// ── Shared delay view (reports 1 and 2 have the same shape) ──
+// ── Shared delay view (invoice and payment share a response shape) ──
 function DelayReport({ report, kind, filters = {} }) {
   const [openStage, setOpenStage] = useState(null);
+  // Lets the tab-level "Download all" reach the matrix sheet with
+  // whichever metric is currently selected inside it.
+  const sheets = useRef({});
+
   if (!report) return null;
 
   const stages = report.stages || [];
@@ -319,8 +332,8 @@ function DelayReport({ report, kind, filters = {} }) {
     kind === "invoice" ? "Invoice approval delay" : "Payment processing delay";
   const fileBase = kind === "invoice" ? "Invoice_Delays" : "Payment_Delays";
 
-  // Hours go out as numbers rather than the "2.1d" the screen shows —
-  // a text cell can't be sorted or summed in Excel.
+  // Hours export as numbers, not the "2.1d" on screen — a text cell
+  // can't be sorted or summed in Excel.
   const stageSheet = () => ({
     name: "Delay by stage",
     title: `${label} — by stage`,
@@ -471,21 +484,6 @@ function DelayReport({ report, kind, filters = {} }) {
             tone={C.bad}
           />
         )}
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <XlsBtn
-            label="Download all sections"
-            onClick={() =>
-              downloadExcel({
-                filename: fileBase,
-                sheets: [
-                  stageSheet(),
-                  window.__branchMatrixSheet?.(),
-                  offendersSheet(),
-                ],
-              })
-            }
-          />
-        </div>
       </div>
 
       {kind === "payment" && report.dueDatePerformance?.coveragePct < 80 && (
@@ -501,7 +499,23 @@ function DelayReport({ report, kind, filters = {} }) {
         </div>
       )}
 
-      {/* Stage table */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <XlsBtn
+          label="Download all sections"
+          onClick={() =>
+            downloadExcel({
+              filename: fileBase,
+              sheets: [
+                stageSheet(),
+                sheets.current.matrix?.(),
+                offendersSheet(),
+              ].filter(Boolean),
+            })
+          }
+        />
+      </div>
+
+      {/* ── Section 1: delay by stage ── */}
       <div style={S.card}>
         <CardHead title="Delay by stage">
           <XlsBtn
@@ -610,10 +624,10 @@ function DelayReport({ report, kind, filters = {} }) {
         </table>
       </div>
 
-      {/* Branch performance */}
-      <BranchStageMatrix report={report} />
+      {/* ── Section 2: branch x stage matrix ── */}
+      <BranchStageMatrix report={report} filters={filters} register={sheets} />
 
-      {/* Worst offenders */}
+      {/* ── Section 3: worst offenders ── */}
       <div style={S.card}>
         <CardHead title="Stuck the longest">
           <XlsBtn
@@ -668,7 +682,7 @@ function DelayReport({ report, kind, filters = {} }) {
   );
 }
 
-// ── Branch (rows) x Stage (columns) matrix ──────────────────
+// ── Branch (rows) x Stage (columns) ─────────────────────────
 // One metric at a time: six numbers per cell is unreadable, and the
 // question people actually ask is "which branch is worst at X".
 const MATRIX_METRICS = [
@@ -691,8 +705,8 @@ const MATRIX_METRICS = [
     label: "Cleared on time",
     render: (v) => (v === null || v === undefined ? "—" : `${v}%`),
     tone: pctColor,
-    // Recomputed from the underlying counts, not averaged — averaging
-    // percentages across stages of different sizes gives a wrong answer.
+    // Recomputed from the counts, never averaged — averaging percentages
+    // across stages of different sizes gives a wrong answer.
     total: (rows) => {
       const c = rows.reduce((s, r) => s + (r.count || 0), 0);
       const b = rows.reduce((s, r) => s + (r.breached || 0), 0);
@@ -704,8 +718,8 @@ const MATRIX_METRICS = [
     label: "Avg time in stage",
     render: (v) => dur(v),
     tone: () => "#334155",
-    // Weighted by row count, so a stage with 200 items counts more
-    // than one with 3.
+    // Weighted by row count, so a stage with 200 items counts more than
+    // one with 3.
     total: (rows) => {
       const c = rows.reduce((s, r) => s + (r.count || 0), 0);
       if (!c) return null;
@@ -730,22 +744,11 @@ const MATRIX_METRICS = [
   },
 ];
 
-function BranchStageMatrix({ report }) {
+function BranchStageMatrix({ report, filters = {}, register }) {
   const [metricKey, setMetricKey] = useState("breached");
   const metric = MATRIX_METRICS.find((m) => m.key === metricKey);
   const rows = report.byBranch || [];
   const stages = report.stages || [];
-
-  if (!rows.length) {
-    return (
-      <div style={S.card}>
-        <div style={S.cardTitle}>Branch performance</div>
-        <div style={{ padding: 28, textAlign: "center", color: "#94a3b8" }}>
-          No branch activity in this period
-        </div>
-      </div>
-    );
-  }
 
   // branchId -> { name, byStage: { stageKey: row } }
   const branches = new Map();
@@ -756,15 +759,15 @@ function BranchStageMatrix({ report }) {
     branches.get(id).byStage[r.stage] = r;
   });
 
-  // Worst first on the selected metric, so the branch that needs
-  // attention is at the top rather than buried alphabetically.
+  // Worst first on the selected metric, so the branch needing attention
+  // is the top row rather than buried alphabetically.
   const branchList = [...branches.entries()].sort(([, a], [, b]) => {
     const av = metric.total(Object.values(a.byStage));
     const bv = metric.total(Object.values(b.byStage));
     if (metricKey === "onTimePct" || metricKey === "avgHours") {
-      // Low on-time % is bad; high avg time is bad.
       if (av === null) return 1;
       if (bv === null) return -1;
+      // Low on-time % is bad; high average time is bad.
       return metricKey === "onTimePct" ? av - bv : bv - av;
     }
     return (bv || 0) - (av || 0);
@@ -775,48 +778,54 @@ function BranchStageMatrix({ report }) {
       [...branches.values()].map((b) => b.byStage[stageKey]).filter(Boolean),
     );
 
+  const colFmt =
+    metric.key === "amount"
+      ? "money"
+      : metric.key === "avgHours"
+        ? "hours"
+        : metric.key === "onTimePct"
+          ? "pct"
+          : "int";
+
   const matrixSheet = () => ({
     name: "Branch x stage",
     title: `Branch performance by stage — ${metric.label}`,
-    meta: filterMeta({}, [["Metric", metric.label]]),
+    meta: filterMeta(filters, [["Metric", metric.label]]),
     columns: [
       { header: "Branch", width: 24, value: (r) => r.name },
       ...stages.map((s) => ({
         header: s.stageLabel,
         width: 18,
-        fmt:
-          metric.key === "amount"
-            ? "money"
-            : metric.key === "avgHours"
-              ? "hours"
-              : metric.key === "onTimePct"
-                ? "pct"
-                : "int",
-        value: (r) => {
-          const c = r.byStage[s.stage];
-          return c ? c[metric.key] : "";
-        },
+        fmt: colFmt,
+        value: (r) =>
+          r.byStage[s.stage] ? r.byStage[s.stage][metric.key] : "",
       })),
       {
         header: "All stages",
         width: 18,
-        fmt:
-          metric.key === "amount"
-            ? "money"
-            : metric.key === "avgHours"
-              ? "hours"
-              : metric.key === "onTimePct"
-                ? "pct"
-                : "int",
+        fmt: colFmt,
         value: (r) => metric.total(Object.values(r.byStage)),
       },
     ],
     rows: branchList.map(([, b]) => b),
   });
 
-  // Exposed so the tab-level "Download all" can include the matrix with
-  // whichever metric is on screen.
-  window.__branchMatrixSheet = matrixSheet;
+  // Hand the current sheet up so the tab-level download can include it
+  // with whichever metric is on screen.
+  useEffect(() => {
+    if (register) register.current.matrix = matrixSheet;
+  });
+
+  if (!rows.length) {
+    return (
+      <div style={S.card}>
+        <div style={S.cardTitle}>Branch performance by stage</div>
+        <div style={{ padding: 28, textAlign: "center", color: "#94a3b8" }}>
+          No branch activity in this period
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={S.card}>
@@ -835,112 +844,115 @@ function BranchStageMatrix({ report }) {
               {m.label}
             </button>
           ))}
+          <XlsBtn
+            onClick={() =>
+              downloadExcel({
+                filename: "Branch_Stage_Matrix",
+                sheets: [matrixSheet()],
+              })
+            }
+          />
         </div>
-        <XlsBtn
-          onClick={() =>
-            downloadExcel({
-              filename: "Branch_Stage_Matrix",
-              sheets: [matrixSheet()],
-            })
-          }
-        />
       </div>
 
-      <table style={S.table}>
-        <thead>
-          <tr style={S.thead}>
-            <th style={{ ...S.th, ...S.stickyHead }}>Branch</th>
-            {stages.map((s) => (
-              <th key={s.stage} style={S.thR}>
-                {s.stageLabel}
-                {s.slaHours ? (
-                  <div style={S.slaHint}>{s.slaHours}h target</div>
-                ) : null}
-              </th>
-            ))}
-            <th style={{ ...S.thR, ...S.totalCol }}>All stages</th>
-          </tr>
-        </thead>
-        <tbody>
-          {branchList.map(([id, b]) => {
-            const rowTotal = metric.total(Object.values(b.byStage));
-            return (
-              <tr key={id} style={S.tr}>
-                <td style={{ ...S.td, ...S.stickyCell }}>{b.name}</td>
-                {stages.map((s) => {
-                  const cell = b.byStage[s.stage];
-                  const value = cell ? cell[metric.key] : null;
-                  return (
-                    <td
-                      key={s.stage}
-                      style={{
-                        ...S.tdR,
-                        color: cell ? metric.tone(value) : "#cbd5e1",
-                        fontWeight:
-                          cell && metric.key === "breached" && value
-                            ? 700
-                            : 500,
-                      }}
-                      title={
-                        cell
-                          ? `${b.name} — ${s.stageLabel}\n${num(cell.pending)} waiting, ${num(cell.breached)} past SLA, ${num(cell.count)} total`
-                          : "No activity"
-                      }
-                    >
-                      {cell ? metric.render(value) : "—"}
-                    </td>
-                  );
-                })}
-                <td style={{ ...S.tdR, ...S.totalCol, fontWeight: 700 }}>
-                  {metric.render(
-                    metric.key === "avgHours" && rowTotal !== null
-                      ? Math.round(rowTotal * 10) / 10
-                      : rowTotal,
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-          <tr style={S.totalRow}>
-            <td
-              style={{
-                ...S.td,
-                ...S.stickyCell,
-                fontWeight: 700,
-                background: "#f8fafc",
-              }}
-            >
-              All branches
-            </td>
-            {stages.map((s) => {
-              const v = columnTotal(s.stage);
+      <div style={{ overflowX: "auto" }}>
+        <table style={S.table}>
+          <thead>
+            <tr style={S.thead}>
+              <th style={{ ...S.th, ...S.stickyHead }}>Branch</th>
+              {stages.map((s) => (
+                <th key={s.stage} style={S.thR}>
+                  {s.stageLabel}
+                  {s.slaHours ? (
+                    <div style={S.slaHint}>{s.slaHours}h target</div>
+                  ) : null}
+                </th>
+              ))}
+              <th style={{ ...S.thR, ...S.totalCol }}>All stages</th>
+            </tr>
+          </thead>
+          <tbody>
+            {branchList.map(([id, b]) => {
+              const rowTotal = metric.total(Object.values(b.byStage));
               return (
-                <td key={s.stage} style={{ ...S.tdR, fontWeight: 700 }}>
-                  {metric.render(
-                    metric.key === "avgHours" && v !== null
-                      ? Math.round(v * 10) / 10
-                      : v,
-                  )}
-                </td>
+                <tr key={id} style={S.tr}>
+                  <td style={{ ...S.td, ...S.stickyCell }}>{b.name}</td>
+                  {stages.map((s) => {
+                    const cell = b.byStage[s.stage];
+                    const value = cell ? cell[metric.key] : null;
+                    return (
+                      <td
+                        key={s.stage}
+                        style={{
+                          ...S.tdR,
+                          color: cell ? metric.tone(value) : "#cbd5e1",
+                          fontWeight:
+                            cell && metric.key === "breached" && value
+                              ? 700
+                              : 500,
+                        }}
+                        title={
+                          cell
+                            ? `${b.name} — ${s.stageLabel}\n${num(cell.pending)} waiting, ${num(cell.breached)} past SLA, ${num(cell.count)} total`
+                            : "No activity"
+                        }
+                      >
+                        {cell ? metric.render(value) : "—"}
+                      </td>
+                    );
+                  })}
+                  <td style={{ ...S.tdR, ...S.totalCol, fontWeight: 700 }}>
+                    {metric.render(
+                      metric.key === "avgHours" && rowTotal !== null
+                        ? Math.round(rowTotal * 10) / 10
+                        : rowTotal,
+                    )}
+                  </td>
+                </tr>
               );
             })}
-            <td style={{ ...S.tdR, ...S.totalCol, fontWeight: 700 }}>
-              {metric.render(
-                metric.key === "avgHours" && metric.total(rows) !== null
-                  ? Math.round(metric.total(rows) * 10) / 10
-                  : metric.total(rows),
-              )}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+            <tr style={S.totalRow}>
+              <td
+                style={{
+                  ...S.td,
+                  ...S.stickyCell,
+                  fontWeight: 700,
+                  background: "#f8fafc",
+                }}
+              >
+                All branches
+              </td>
+              {stages.map((s) => {
+                const v = columnTotal(s.stage);
+                return (
+                  <td key={s.stage} style={{ ...S.tdR, fontWeight: 700 }}>
+                    {metric.render(
+                      metric.key === "avgHours" && v !== null
+                        ? Math.round(v * 10) / 10
+                        : v,
+                    )}
+                  </td>
+                );
+              })}
+              <td style={{ ...S.tdR, ...S.totalCol, fontWeight: 700 }}>
+                {metric.render(
+                  metric.key === "avgHours" && metric.total(rows) !== null
+                    ? Math.round(metric.total(rows) * 10) / 10
+                    : metric.total(rows),
+                )}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
-// ── Report 3 ────────────────────────────────────────────────
+// ── Expense categories ──────────────────────────────────────
 function ExpenseReport({ report, filters = {} }) {
   const [branchView, setBranchView] = useState(false);
+
   if (!report) return null;
 
   const {
@@ -982,6 +994,23 @@ function ExpenseReport({ report, filters = {} }) {
           ? { __label: `${g.type} total`, ...g.total, categoryName: "" }
           : null,
       }));
+
+  // For "download all", the branch sheet carries every type and branch,
+  // independent of whatever is selected inside the branch-by-branch view.
+  const fullBranchSheet = () =>
+    byBranchCategory.length
+      ? {
+          name: "By branch",
+          title: "Category spend by branch",
+          meta: filterMeta(filters),
+          columns: [
+            { header: "Branch", key: "branchName", width: 22 },
+            { header: "Type", key: "expenseType", width: 10 },
+            ...moneyCols,
+          ],
+          rows: byBranchCategory,
+        }
+      : null;
 
   const monthlySheet = () => {
     const keys = [
@@ -1026,8 +1055,7 @@ function ExpenseReport({ report, filters = {} }) {
         >
           {num(dataQuality.typeMismatch)} invoices are filed under a category
           whose type differs from the type stored on the invoice. These figures
-          follow the category. Run scripts/checkExpenseTypeDrift.js to see which
-          ones.
+          follow the category.
         </div>
       )}
 
@@ -1049,21 +1077,28 @@ function ExpenseReport({ report, filters = {} }) {
         ))}
       </div>
 
-      <div style={S.toggleRow}>
-        <button
-          style={{ ...S.toggle, ...(!branchView ? S.toggleActive : {}) }}
-          onClick={() => setBranchView(false)}
-        >
-          All branches
-        </button>
-        <button
-          style={{ ...S.toggle, ...(branchView ? S.toggleActive : {}) }}
-          onClick={() => setBranchView(true)}
-        >
-          Branch by branch
-        </button>
-      </div>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 10,
+        }}
+      >
+        <div style={S.toggleRow}>
+          <button
+            style={{ ...S.toggle, ...(!branchView ? S.toggleActive : {}) }}
+            onClick={() => setBranchView(false)}
+          >
+            All branches
+          </button>
+          <button
+            style={{ ...S.toggle, ...(branchView ? S.toggleActive : {}) }}
+            onClick={() => setBranchView(true)}
+          >
+            Branch by branch
+          </button>
+        </div>
         <XlsBtn
           label="Download all sections"
           onClick={() =>
@@ -1071,7 +1106,7 @@ function ExpenseReport({ report, filters = {} }) {
               filename: "Expense_Analysis",
               sheets: [
                 ...categorySheets(),
-                window.__branchByBranchSheet?.(),
+                fullBranchSheet(),
                 report.monthly?.length ? monthlySheet() : null,
               ].filter(Boolean),
             })
@@ -1079,6 +1114,7 @@ function ExpenseReport({ report, filters = {} }) {
         />
       </div>
 
+      {/* ── Either the category tables, or the branch view — never both ── */}
       {!branchView ? (
         grouped.map(({ type, rows, total }) => (
           <div key={type} style={S.card}>
@@ -1089,7 +1125,9 @@ function ExpenseReport({ report, filters = {} }) {
                 onClick={() =>
                   downloadExcel({
                     filename: `Expense_${type}`,
-                    sheets: [categorySheets().find((s) => s.name === type)],
+                    sheets: [
+                      categorySheets().find((s) => s.name === type),
+                    ].filter(Boolean),
                   })
                 }
               />
@@ -1162,7 +1200,6 @@ function ExpenseReport({ report, filters = {} }) {
         <BranchByBranch rows={byBranchCategory} />
       )}
 
-      {/* Monthly trend */}
       {report.monthly?.length > 0 && (
         <div style={S.card}>
           <CardHead title="Monthly spend">
@@ -1183,11 +1220,9 @@ function ExpenseReport({ report, filters = {} }) {
 }
 
 // ── Branch-by-branch, filtered by expense type and branch ───
-// Both dropdowns are populated from the rows actually returned, so
-// they can never offer a combination that has no data. The page-level
-// filter bar above still applies; these narrow what it returned.
+// Both dropdowns are populated from the rows actually returned, so they
+// can never offer a combination that has no data behind it.
 function BranchByBranch({ rows = [] }) {
-  // Revenue first, then Capital, then anything unexpected.
   const ORDER = ["Revenue", "Capital"];
   const types = [
     ...new Set(rows.map((r) => r.expenseType).filter(Boolean)),
@@ -1201,7 +1236,7 @@ function BranchByBranch({ rows = [] }) {
   const [branchId, setBranchId] = useState("");
 
   // Keep the selections valid when the page filters change the data
-  // underneath us — otherwise the table silently empties.
+  // underneath — otherwise the table silently empties.
   useEffect(() => {
     if (types.length && !types.includes(type)) {
       setType(types[0]);
@@ -1227,7 +1262,6 @@ function BranchByBranch({ rows = [] }) {
   const visible = branchId
     ? forType.filter((r) => String(r.branchId) === branchId)
     : forType;
-
   const allBranches = !branchId;
 
   // Branch name, then largest spend first inside each branch.
@@ -1240,6 +1274,9 @@ function BranchByBranch({ rows = [] }) {
   const sum = (list, k) => list.reduce((s, r) => s + (r[k] || 0), 0);
   const totals = {
     count: sum(visible, "count"),
+    amount: sum(visible, "amount"),
+    gstAmount: sum(visible, "gstAmount"),
+    tdsAmount: sum(visible, "tdsAmount"),
     netPayable: sum(visible, "netPayable"),
     paid: sum(visible, "paid"),
     outstanding: sum(visible, "outstanding"),
@@ -1272,22 +1309,12 @@ function BranchByBranch({ rows = [] }) {
     totals: { __label: selectedBranchName || "All branches", ...totals },
   });
 
-  window.__branchByBranchSheet = sheet;
-
   return (
     <div style={S.card}>
       <div style={S.branchHead}>
         <div style={S.cardTitle}>
           {type} spend — {selectedBranchName || "all branches"}
         </div>
-        <XlsBtn
-          onClick={() =>
-            downloadExcel({
-              filename: `Expense_${type}_By_Branch`,
-              sheets: [sheet()],
-            })
-          }
-        />
         <div
           style={{
             display: "flex",
@@ -1296,8 +1323,7 @@ function BranchByBranch({ rows = [] }) {
             flexWrap: "wrap",
           }}
         >
-          <label style={S.field}>
-            <span style={S.fieldLabel}>Expense type</span>
+          <Field label="Expense type">
             <select
               style={S.input}
               value={type}
@@ -1309,9 +1335,8 @@ function BranchByBranch({ rows = [] }) {
                 </option>
               ))}
             </select>
-          </label>
-          <label style={S.field}>
-            <span style={S.fieldLabel}>Branch</span>
+          </Field>
+          <Field label="Branch">
             <select
               style={S.input}
               value={branchId}
@@ -1324,7 +1349,15 @@ function BranchByBranch({ rows = [] }) {
                 </option>
               ))}
             </select>
-          </label>
+          </Field>
+          <XlsBtn
+            onClick={() =>
+              downloadExcel({
+                filename: `Expense_${type}_By_Branch`,
+                sheets: [sheet()],
+              })
+            }
+          />
         </div>
       </div>
 
@@ -1350,8 +1383,8 @@ function BranchByBranch({ rows = [] }) {
           </thead>
           <tbody>
             {sorted.map((r, i) => {
-              // With every branch shown, print the name once per group and
-              // close each group with its own subtotal.
+              // With every branch shown, print the name once per group
+              // and close each group with its own subtotal.
               const prev = sorted[i - 1];
               const next = sorted[i + 1];
               const firstOfBranch =
@@ -1514,13 +1547,19 @@ const EmptyRow = ({ cols, text }) => (
   </tr>
 );
 
+const Field = ({ label, children }) => (
+  <label style={S.field}>
+    <span style={S.fieldLabel}>{label}</span>
+    {children}
+  </label>
+);
+
 const XlsBtn = ({ onClick, label = "Excel" }) => (
   <button style={S.xlsBtn} onClick={onClick} title="Download this section">
     ⬇ {label}
   </button>
 );
 
-// Card header with the title on the left and actions on the right.
 const CardHead = ({ title, children }) => (
   <div style={S.cardHead}>
     <div style={S.cardTitle}>{title}</div>
@@ -1537,7 +1576,7 @@ const CardHead = ({ title, children }) => (
   </div>
 );
 
-// ── Styles (matching the existing pages) ────────────────────
+// ── Styles ──────────────────────────────────────────────────
 const S = {
   layout: { display: "flex", minHeight: "100vh", background: "#f8fafc" },
   main: { flex: 1, padding: "24px 28px", minWidth: 0 },
@@ -1590,7 +1629,6 @@ const S = {
     borderRadius: 8,
     fontSize: 13,
     fontWeight: 600,
-    cursor: "pointer",
   },
   clearBtn: {
     padding: "9px 14px",
@@ -1600,6 +1638,7 @@ const S = {
     fontSize: 13,
     cursor: "pointer",
   },
+  filterHint: { fontSize: 12, color: C.warn, alignSelf: "center" },
   tabs: { display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" },
   tab: {
     padding: "9px 16px",
@@ -1633,11 +1672,30 @@ const S = {
     padding: "18px 20px",
     overflowX: "auto",
   },
+  cardHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 14,
+  },
   cardTitle: {
     fontSize: 14,
     fontWeight: 700,
     color: C.primary,
     marginBottom: 0,
+  },
+  xlsBtn: {
+    padding: "6px 12px",
+    background: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    color: "#15803d",
+    borderRadius: 7,
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
   },
   note: {
     background: "#fffbeb",
@@ -1705,7 +1763,6 @@ const S = {
     borderRadius: 4,
     padding: "1px 6px",
   },
-  pill: { fontSize: 11, fontWeight: 700, borderRadius: 5, padding: "2px 8px" },
   barTrack: {
     height: 8,
     background: "#f1f5f9",
@@ -1713,7 +1770,7 @@ const S = {
     overflow: "hidden",
   },
   barFill: { height: "100%", borderRadius: 5 },
-  toggleRow: { display: "flex", gap: 6 },
+  toggleRow: { display: "flex", gap: 6, flexWrap: "wrap" },
   toggle: {
     padding: "7px 14px",
     border: `1px solid ${C.line}`,
@@ -1729,24 +1786,6 @@ const S = {
     color: "#2563eb",
     borderColor: "#bfdbfe",
   },
-  trendWrap: {
-    display: "flex",
-    alignItems: "flex-end",
-    gap: 12,
-    overflowX: "auto",
-    padding: "8px 0",
-    minHeight: 210,
-  },
-  trendCol: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 5,
-    minWidth: 66,
-  },
-  trendAmt: { fontSize: 10, color: C.muted, fontWeight: 600 },
-  trendBar: { width: 16, borderRadius: "3px 3px 0 0" },
-  trendLabel: { fontSize: 10, color: "#94a3b8" },
   matrixHead: {
     display: "flex",
     justifyContent: "space-between",
@@ -1754,6 +1793,14 @@ const S = {
     gap: 12,
     flexWrap: "wrap",
     marginBottom: 12,
+  },
+  branchHead: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+    gap: 14,
+    flexWrap: "wrap",
+    marginBottom: 14,
   },
   stickyHead: {
     position: "sticky",
@@ -1772,34 +1819,24 @@ const S = {
   },
   totalCol: { borderLeft: `2px solid ${C.line}`, background: "#fbfdff" },
   totalRow: { borderTop: `2px solid ${C.line}`, background: "#f8fafc" },
-  slaHint: { fontSize: 10, fontWeight: 500, color: "#94a3b8", marginTop: 2 },
-  branchHead: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-end",
-    gap: 14,
-    flexWrap: "wrap",
-    marginBottom: 14,
-  },
   subtotalRow: { borderBottom: `1px solid ${C.line}`, background: "#fafbfc" },
-  filterHint: { fontSize: 12, color: C.warn, alignSelf: "center" },
-  cardHead: {
+  slaHint: { fontSize: 10, fontWeight: 500, color: "#94a3b8", marginTop: 2 },
+  trendWrap: {
     display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
+    alignItems: "flex-end",
     gap: 12,
-    flexWrap: "wrap",
-    marginBottom: 14,
+    overflowX: "auto",
+    padding: "8px 0",
+    minHeight: 210,
   },
-  xlsBtn: {
-    padding: "6px 12px",
-    background: "#f0fdf4",
-    border: "1px solid #bbf7d0",
-    color: "#15803d",
-    borderRadius: 7,
-    fontSize: 12,
-    fontWeight: 600,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
+  trendCol: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    gap: 5,
+    minWidth: 66,
   },
+  trendAmt: { fontSize: 10, color: C.muted, fontWeight: 600 },
+  trendBar: { width: 16, borderRadius: "3px 3px 0 0" },
+  trendLabel: { fontSize: 10, color: "#94a3b8" },
 };

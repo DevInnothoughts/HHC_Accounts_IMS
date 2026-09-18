@@ -6,6 +6,7 @@ import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { PAYMENT_WORKFLOW } from "../config/constants";
 import SearchableSelect from "../components/SearchableSelect.jsx";
+import BulkUtrModal from "../components/BulkUtrModal.jsx";
 
 // Rows per page. All-time data is served page by page, never in one payload.
 const PAGE_SIZE = 20;
@@ -148,6 +149,9 @@ export default function PaymentProcessing() {
     new Date().toISOString().slice(0, 10),
   );
   const [bulkFormat, setBulkFormat] = useState("standard"); // "standard" | "fedone"
+  // Bulk UTR lives in its own modal component — the entry grid and the
+  // per-row batch results would otherwise double this file again.
+  const [bulkUtrOpen, setBulkUtrOpen] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
@@ -417,6 +421,29 @@ export default function PaymentProcessing() {
       alert(err.response?.data?.message || "Failed to record UTR");
     } finally {
       setUtrSubmitting(false);
+    }
+  };
+
+  // Bulk UTR only applies once the bank Excel exists for that payment —
+  // the Excel IS the batch the UTRs are being keyed from. (The single
+  // UTR button is unchanged and still works from "Accounts Approved".)
+  const utrEligibleIds = payments
+    .filter(
+      (p) => selectedIds.includes(p._id) && p.status === "Excel Generated",
+    )
+    .map((p) => p._id);
+
+  // Something is ticked, but no Excel has been generated for any of it.
+  const utrSelectionUnready =
+    selectedIds.length > 0 && utrEligibleIds.length === 0;
+
+  const handleBulkUtrDone = (summary) => {
+    setSelectedIds([]);
+    fetchData();
+    if (summary?.failed || summary?.skipped) {
+      setError(
+        `Bulk UTR: ${summary.updated} recorded, ${summary.skipped} skipped, ${summary.failed} failed — see the batch summary for details.`,
+      );
     }
   };
 
@@ -979,6 +1006,32 @@ export default function PaymentProcessing() {
                         ? "⏳ Generating..."
                         : `🏦 FedOne Excel (${selectedIds.length})`}
                     </button>
+                    {/* Bulk UTR opens whether or not anything is ticked:
+    with a selection it pre-fills those rows, without
+    one it lists everything still awaiting a UTR. */}
+                    {isAccounts && (
+                      <button
+                        style={{
+                          ...S.bulkExcelBtn,
+                          background: "#166534",
+                          opacity: utrSelectionUnready ? 0.5 : 1,
+                          cursor: utrSelectionUnready
+                            ? "not-allowed"
+                            : "pointer",
+                        }}
+                        disabled={utrSelectionUnready}
+                        onClick={() => setBulkUtrOpen(true)}
+                        title={
+                          utrSelectionUnready
+                            ? "Generate the bank Excel for these payments first — bulk UTR opens once it exists"
+                            : "Key in UTRs for many payments and post them in one batch"
+                        }
+                      >
+                        {utrEligibleIds.length > 0
+                          ? `🔢 Bulk UTR (${utrEligibleIds.length})`
+                          : "🔢 Bulk UTR"}
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -1714,6 +1767,15 @@ export default function PaymentProcessing() {
             </div>
           );
         })()}
+
+      {/* Bulk UTR Modal */}
+      <BulkUtrModal
+        open={bulkUtrOpen}
+        preselectedIds={utrEligibleIds}
+        onClose={() => setBulkUtrOpen(false)}
+        onDone={handleBulkUtrDone}
+      />
+
       {/* UTR Entry Modal */}
       {utrModal && (
         <div style={S.overlay}>

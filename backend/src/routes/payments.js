@@ -7,6 +7,14 @@ const { ROLES } = require("../config/constants");
 router.use(authenticate);
 
 router.get("/approved-invoices", ctrl.getApprovedInvoicesForPayment);
+// Literal paths MUST stay above "/:id" — Express matches in order, and a
+// dynamic segment will happily swallow "awaiting-utr" and try to cast it
+// to an ObjectId. (Same trap that hid the /export/excel vendor route.)
+router.get(
+  "/awaiting-utr",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.getPaymentsAwaitingUTR,
+);
 router.get("/", ctrl.getPayments);
 router.get("/:id", ctrl.getPaymentById);
 router.post("/raise/:invoiceId", roleGuard(ROLES.ACCOUNTS), ctrl.raisePayment);
@@ -33,6 +41,12 @@ router.post(
   "/bulk-fedone-excel",
   roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
   ctrl.bulkGenerateFedOneExcel,
+);
+// Bulk first, for the same ordering reason as above.
+router.patch(
+  "/bulk-utr",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.bulkRecordUTR,
 );
 
 router.patch(

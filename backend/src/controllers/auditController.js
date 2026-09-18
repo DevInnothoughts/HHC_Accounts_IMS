@@ -97,6 +97,7 @@ const VERBS = {
   REJECT_PAYMENT: "rejected",
   GENERATE_PAYMENT_EXCEL: "generated the bank file for",
   RECORD_UTR: "recorded the UTR for",
+  BULK_RECORD_UTR: "recorded UTRs in bulk",
   CREATE_VENDOR: "added",
   UPDATE_VENDOR: "edited",
   APPROVE_VENDOR: "approved",
