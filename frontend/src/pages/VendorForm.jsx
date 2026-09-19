@@ -76,7 +76,11 @@ const BRANCH_EDITABLE = ["vendorCategory", "gstNumber"];
 // Body for POST/PUT /vendor-masters (server whitelists again).
 const MASTER_BODY_FIELDS = Object.keys(INIT).filter((k) => k !== "branch");
 
-const DOC_LABEL = { pan: "PAN Card", gst: "GST Certificate", cheque: "Cancelled Cheque" };
+const DOC_LABEL = {
+  pan: "PAN Card",
+  gst: "GST Certificate",
+  cheque: "Cancelled Cheque",
+};
 const idOf = (v) => String(v?._id || v || "");
 
 export default function VendorForm() {
@@ -107,9 +111,7 @@ export default function VendorForm() {
 
   // Approved vendors are edited only by accounts (unchanged rule).
   const editLocked =
-    isEdit &&
-    savedVendor?.approvalStatus === "approved" &&
-    !isAdmin;
+    isEdit && savedVendor?.approvalStatus === "approved" && !isAdmin;
 
   // ── Load ────────────────────────────────────────────────
   useEffect(() => {
@@ -157,7 +159,9 @@ export default function VendorForm() {
         }
       })
       .catch((err) =>
-        setErrors({ submit: err.response?.data?.message || "Failed to load vendor" }),
+        setErrors({
+          submit: err.response?.data?.message || "Failed to load vendor",
+        }),
       )
       .finally(() => setFetching(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,7 +181,8 @@ export default function VendorForm() {
     // A branch-level record without a PAN can't be given one here: a PAN
     // vendor is registered through the Vendor Master (the server refuses
     // too). Accounts may still correct a legacy record.
-    const panlessLocal = mode === "local" && !savedVendor?.panNumber && !isAdmin;
+    const panlessLocal =
+      mode === "local" && !savedVendor?.panNumber && !isAdmin;
     if (f === "panNumber") return mode === "new-master" || panlessLocal;
     if (f === "vendorType") return mode === "no-pan" || panlessLocal;
     if (f === "branch")
@@ -214,9 +219,16 @@ export default function VendorForm() {
 
       if (mode === "new-master" && !form.panNumber?.trim())
         e.panNumber = "PAN number is required";
-      else if (mode === "local" && profile.requirePAN && !form.panNumber?.trim())
+      else if (
+        mode === "local" &&
+        profile.requirePAN &&
+        !form.panNumber?.trim()
+      )
         e.panNumber = "PAN number is required";
-      else if (form.panNumber?.trim() && !VENDOR_MASTER.PAN_REGEX.test(form.panNumber))
+      else if (
+        form.panNumber?.trim() &&
+        !VENDOR_MASTER.PAN_REGEX.test(form.panNumber)
+      )
         e.panNumber = "Invalid PAN (e.g. ABCDE1234F)";
 
       if (profile.requireBank) {
@@ -227,7 +239,10 @@ export default function VendorForm() {
           e.accountNumber = "Account number is required";
         if (!form.ifscCode?.trim()) e.ifscCode = "IFSC code is required";
       }
-      if (form.ifscCode?.trim() && !VENDOR_MASTER.IFSC_REGEX.test(form.ifscCode))
+      if (
+        form.ifscCode?.trim() &&
+        !VENDOR_MASTER.IFSC_REGEX.test(form.ifscCode)
+      )
         e.ifscCode = "Invalid IFSC (e.g. SBIN0001234)";
     }
 
@@ -260,20 +275,24 @@ export default function VendorForm() {
     ifscCode: 2,
   };
 
-  const pick = (keys) =>
-    keys.reduce((o, k) => ({ ...o, [k]: form[k] }), {});
+  const pick = (keys) => keys.reduce((o, k) => ({ ...o, [k]: form[k] }), {});
 
   // ── Save ────────────────────────────────────────────────
   const handleSaveDetails = async () => {
     if (editLocked) {
-      setErrors({ submit: "Approved vendors can only be edited by the accounts team." });
+      setErrors({
+        submit: "Approved vendors can only be edited by the accounts team.",
+      });
       return;
     }
     const e = computeErrors();
     if (Object.keys(e).length > 0) {
       const first = Object.keys(FIELD_SECTION).find((f) => e[f]);
       if (first !== undefined) setActiveSection(FIELD_SECTION[first]);
-      setErrors({ ...e, submit: `Please fix the errors above: ${Object.values(e).join(", ")}` });
+      setErrors({
+        ...e,
+        submit: `Please fix the errors above: ${Object.values(e).join(", ")}`,
+      });
       return;
     }
     setErrors({});
@@ -291,7 +310,10 @@ export default function VendorForm() {
           await refreshVendor(idOf(data.branchVendor));
         } else {
           // Still a draft: the creator may correct it (server enforces).
-          await api.put(`/vendor-masters/${masterId}`, pick(MASTER_BODY_FIELDS));
+          await api.put(
+            `/vendor-masters/${masterId}`,
+            pick(MASTER_BODY_FIELDS),
+          );
           await api.put(`/vendors/${savedVendorId}`, pick(BRANCH_EDITABLE));
           await refreshVendor();
         }
@@ -472,7 +494,16 @@ export default function VendorForm() {
           <h1 style={S.title}>{title}</h1>
         </div>
 
-        <div style={S.formCard}>
+        {/* The PAN step is short: with the card's overflow:hidden the Branch
+            dropdown list was clipped at the card's bottom edge and looked
+            empty. Let it overflow on that step only. */}
+        <div
+          style={
+            mode === "gate"
+              ? { ...S.formCard, overflow: "visible" }
+              : S.formCard
+          }
+        >
           {mode === "gate" ? (
             <div style={S.formBody}>
               <PanLookupGate
@@ -491,9 +522,14 @@ export default function VendorForm() {
                   // but the branch vendor page is still branch-scoped for
                   // them — show the master, which lists every branch.
                   if (isAdmin && data.vendor?.vendorMaster) {
-                    navigate(`/vendor-masters/${idOf(data.vendor.vendorMaster)}`, { state: { flash } });
+                    navigate(
+                      `/vendor-masters/${idOf(data.vendor.vendorMaster)}`,
+                      { state: { flash } },
+                    );
                   } else {
-                    navigate(`/vendors/${idOf(data.vendor)}`, { state: { flash } });
+                    navigate(`/vendors/${idOf(data.vendor)}`, {
+                      state: { flash },
+                    });
                   }
                 }}
               />
@@ -505,11 +541,15 @@ export default function VendorForm() {
                 {SECTIONS.map((sec, i) => (
                   <button
                     key={sec}
-                    style={{ ...S.tab, ...(activeSection === i ? S.tabActive : {}) }}
+                    style={{
+                      ...S.tab,
+                      ...(activeSection === i ? S.tabActive : {}),
+                    }}
                     onClick={() => {
                       if (i === 3 && !savedVendorId) {
                         setErrors({
-                          submit: "Please save vendor details first before uploading documents.",
+                          submit:
+                            "Please save vendor details first before uploading documents.",
                         });
                         return;
                       }
@@ -535,7 +575,9 @@ export default function VendorForm() {
                     </span>
                     {sec}
                     {i === 3 && savedVendor?.documents?.length > 0 && (
-                      <span style={S.docCountBadge}>{savedVendor.documents.length}</span>
+                      <span style={S.docCountBadge}>
+                        {savedVendor.documents.length}
+                      </span>
                     )}
                   </button>
                 ))}
@@ -578,8 +620,10 @@ export default function VendorForm() {
                 {mode === "new-master" && (
                   <div style={S.infoBox}>
                     New vendor for the whole group · PAN{" "}
-                    <strong style={{ fontFamily: "monospace" }}>{form.panNumber}</strong>.
-                    Documents are uploaded once and shared by every branch.
+                    <strong style={{ fontFamily: "monospace" }}>
+                      {form.panNumber}
+                    </strong>
+                    . Documents are uploaded once and shared by every branch.
                     {!masterId && (
                       <button style={S.inlineLink} onClick={backToGate}>
                         Change PAN
@@ -601,7 +645,8 @@ export default function VendorForm() {
                 )}
                 {editLocked && (
                   <div style={S.warnBox}>
-                    🔒 This vendor is approved. Only the accounts team can edit it.
+                    🔒 This vendor is approved. Only the accounts team can edit
+                    it.
                   </div>
                 )}
 
@@ -622,16 +667,26 @@ export default function VendorForm() {
                         />
                       </Field>
                       <Field label="Vendor Name *" error={errors.vendorName}>
-                        {input("vendorName", { placeholder: "Full vendor name" })}
+                        {input("vendorName", {
+                          placeholder: "Full vendor name",
+                        })}
                       </Field>
                       <Field label="Contact Person">
-                        {input("contactPerson", { placeholder: "Contact person" })}
+                        {input("contactPerson", {
+                          placeholder: "Contact person",
+                        })}
                       </Field>
                       <Field label="Mobile *" error={errors.mobile}>
-                        {input("mobile", { placeholder: "10-digit mobile", maxLength: 10 })}
+                        {input("mobile", {
+                          placeholder: "10-digit mobile",
+                          maxLength: 10,
+                        })}
                       </Field>
                       <Field label="Email">
-                        {input("email", { placeholder: "vendor@email.com", type: "email" })}
+                        {input("email", {
+                          placeholder: "vendor@email.com",
+                          type: "email",
+                        })}
                       </Field>
                     </div>
                   </div>
@@ -646,11 +701,15 @@ export default function VendorForm() {
                         <select
                           style={{
                             ...S.input,
-                            ...(fieldDisabled("vendorType") ? S.inputDisabled : {}),
+                            ...(fieldDisabled("vendorType")
+                              ? S.inputDisabled
+                              : {}),
                           }}
                           value={form.vendorType}
                           disabled={fieldDisabled("vendorType")}
-                          onChange={(e) => setField("vendorType", e.target.value)}
+                          onChange={(e) =>
+                            setField("vendorType", e.target.value)
+                          }
                         >
                           {VENDOR_TYPE_OPTIONS.map((t) => (
                             <option key={t.value} value={t.value}>
@@ -664,7 +723,10 @@ export default function VendorForm() {
                             : "Bank details and PAN are required."}
                         </span>
                       </Field>
-                      <Field label="Vendor Category" error={errors.vendorCategory}>
+                      <Field
+                        label="Vendor Category"
+                        error={errors.vendorCategory}
+                      >
                         <SearchableSelect
                           options={VENDOR_CATEGORIES}
                           value={form.vendorCategory}
@@ -677,10 +739,14 @@ export default function VendorForm() {
                         />
                       </Field>
                       <Field label="MSME Number (Optional)">
-                        {input("msmeNumber", { placeholder: "UDYAM-XX-00-0000000" })}
+                        {input("msmeNumber", {
+                          placeholder: "UDYAM-XX-00-0000000",
+                        })}
                       </Field>
                       <Field label="Company Name">
-                        {input("companyName", { placeholder: "Registered company name" })}
+                        {input("companyName", {
+                          placeholder: "Registered company name",
+                        })}
                       </Field>
                       {mode !== "no-pan" && (
                         <Field
@@ -696,7 +762,11 @@ export default function VendorForm() {
                         </Field>
                       )}
                       <Field
-                        label={mode === "new-master" ? "GSTIN (this branch; also the primary GSTIN)" : "GSTIN for this branch"}
+                        label={
+                          mode === "new-master"
+                            ? "GSTIN (this branch; also the primary GSTIN)"
+                            : "GSTIN for this branch"
+                        }
                         error={errors.gstNumber}
                       >
                         {input("gstNumber", {
@@ -706,7 +776,8 @@ export default function VendorForm() {
                           placeholder: "27AAAAA0000A1Z5",
                         })}
                         <span style={S.hint}>
-                          {form.gstNumber?.length >= 2 && gstState(form.gstNumber)
+                          {form.gstNumber?.length >= 2 &&
+                          gstState(form.gstNumber)
                             ? `${gstState(form.gstNumber)} registration. `
                             : ""}
                           GST is registered per state — use the GSTIN this
@@ -718,7 +789,9 @@ export default function VendorForm() {
                           style={{
                             ...S.input,
                             ...S.textarea,
-                            ...(fieldDisabled("businessAddress") ? S.inputDisabled : {}),
+                            ...(fieldDisabled("businessAddress")
+                              ? S.inputDisabled
+                              : {}),
                           }}
                           value={form.businessAddress || ""}
                           disabled={fieldDisabled("businessAddress")}
@@ -735,20 +808,41 @@ export default function VendorForm() {
                   <div>
                     <h2 style={S.sectionTitle}>🏦 Bank Details</h2>
                     <div style={S.infoBox}>
-                      🔒 Bank details are used for payment processing. Ensure accuracy.
+                      🔒 Bank details are used for payment processing. Ensure
+                      accuracy.
                     </div>
 
                     {mode !== "linked" && !editLocked && (
                       <div style={S.scanBox}>
                         <div>
-                          <div style={{ fontWeight: 700, fontSize: 13, color: "#0369a1" }}>
+                          <div
+                            style={{
+                              fontWeight: 700,
+                              fontSize: 13,
+                              color: "#0369a1",
+                            }}
+                          >
                             🤖 Auto-fill from Cancelled Cheque
                           </div>
-                          <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>
-                            Upload a clear photo of the cancelled cheque to auto-fill bank details
+                          <div
+                            style={{
+                              fontSize: 12,
+                              color: "#64748b",
+                              marginTop: 2,
+                            }}
+                          >
+                            Upload a clear photo of the cancelled cheque to
+                            auto-fill bank details
                           </div>
                         </div>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "flex-end",
+                            gap: 6,
+                          }}
+                        >
                           <input
                             ref={chequeInputRef}
                             type="file"
@@ -763,16 +857,24 @@ export default function VendorForm() {
                           <button
                             style={{
                               ...S.scanBtn,
-                              background: chequeScanning ? "#64748b" : "#0369a1",
-                              cursor: chequeScanning ? "not-allowed" : "pointer",
+                              background: chequeScanning
+                                ? "#64748b"
+                                : "#0369a1",
+                              cursor: chequeScanning
+                                ? "not-allowed"
+                                : "pointer",
                             }}
                             disabled={chequeScanning}
                             onClick={() => chequeInputRef.current?.click()}
                           >
-                            {chequeScanning ? "🔍 Reading cheque..." : "📷 Scan Cheque"}
+                            {chequeScanning
+                              ? "🔍 Reading cheque..."
+                              : "📷 Scan Cheque"}
                           </button>
                           {chequeError && (
-                            <span style={{ fontSize: 12, color: "#dc2626" }}>⚠️ {chequeError}</span>
+                            <span style={{ fontSize: 12, color: "#dc2626" }}>
+                              ⚠️ {chequeError}
+                            </span>
                           )}
                         </div>
                       </div>
@@ -780,21 +882,38 @@ export default function VendorForm() {
 
                     {(() => {
                       const req =
-                        (VENDOR_TYPES[form.vendorType] || VENDOR_TYPES.standard).requireBank &&
-                        mode !== "linked";
+                        (VENDOR_TYPES[form.vendorType] || VENDOR_TYPES.standard)
+                          .requireBank && mode !== "linked";
                       const star = req ? " *" : "";
                       return (
                         <div style={S.grid2}>
-                          <Field label={`Account Holder Name${star}`} error={errors.accountHolderName}>
-                            {input("accountHolderName", { placeholder: "As per bank records" })}
+                          <Field
+                            label={`Account Holder Name${star}`}
+                            error={errors.accountHolderName}
+                          >
+                            {input("accountHolderName", {
+                              placeholder: "As per bank records",
+                            })}
                           </Field>
-                          <Field label={`Bank Name${star}`} error={errors.bankName}>
+                          <Field
+                            label={`Bank Name${star}`}
+                            error={errors.bankName}
+                          >
                             {input("bankName", { placeholder: "Bank name" })}
                           </Field>
-                          <Field label={`Account Number${star}`} error={errors.accountNumber}>
-                            {input("accountNumber", { mono: true, placeholder: "Account number" })}
+                          <Field
+                            label={`Account Number${star}`}
+                            error={errors.accountNumber}
+                          >
+                            {input("accountNumber", {
+                              mono: true,
+                              placeholder: "Account number",
+                            })}
                           </Field>
-                          <Field label={`IFSC Code${star}`} error={errors.ifscCode}>
+                          <Field
+                            label={`IFSC Code${star}`}
+                            error={errors.ifscCode}
+                          >
                             {input("ifscCode", {
                               upper: true,
                               mono: true,
@@ -817,8 +936,8 @@ export default function VendorForm() {
                     <h2 style={S.sectionTitle}>📄 Documents</h2>
                     {!savedVendorId ? (
                       <div style={S.warnBox}>
-                        ⚠️ Please save vendor details first (click "Save & Continue" below)
-                        before uploading documents.
+                        ⚠️ Please save vendor details first (click "Save &
+                        Continue" below) before uploading documents.
                       </div>
                     ) : docsFromMaster ? (
                       <FileUpload
@@ -847,23 +966,35 @@ export default function VendorForm() {
 
               {/* Footer */}
               <div style={S.footer}>
-                <button style={S.cancelBtn} onClick={() => navigate("/vendors")}>
+                <button
+                  style={S.cancelBtn}
+                  onClick={() => navigate("/vendors")}
+                >
                   Cancel
                 </button>
                 <div style={{ display: "flex", gap: 10 }}>
                   {activeSection > 0 && (
-                    <button style={S.prevBtn} onClick={() => setActiveSection((s) => s - 1)}>
+                    <button
+                      style={S.prevBtn}
+                      onClick={() => setActiveSection((s) => s - 1)}
+                    >
                       ← Previous
                     </button>
                   )}
                   {activeSection < 2 && (
-                    <button style={S.nextBtn} onClick={() => setActiveSection((s) => s + 1)}>
+                    <button
+                      style={S.nextBtn}
+                      onClick={() => setActiveSection((s) => s + 1)}
+                    >
                       Next →
                     </button>
                   )}
                   {activeSection === 2 && (
                     <button
-                      style={{ ...S.submitBtn, opacity: loading || editLocked ? 0.6 : 1 }}
+                      style={{
+                        ...S.submitBtn,
+                        opacity: loading || editLocked ? 0.6 : 1,
+                      }}
                       onClick={handleSaveDetails}
                       disabled={loading || editLocked}
                     >
@@ -877,15 +1008,34 @@ export default function VendorForm() {
                     </button>
                   )}
                   {activeSection === 3 && (
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "flex-end",
+                        gap: 6,
+                      }}
+                    >
                       {waitsOnMaster && (
-                        <span style={{ fontSize: 12, color: "#6d28d9", fontWeight: 500 }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            color: "#6d28d9",
+                            fontWeight: 500,
+                          }}
+                        >
                           Submitted together with the vendor master by the
                           person who registered it, or by accounts.
                         </span>
                       )}
                       {!allUploaded && needsSubmit && (
-                        <span style={{ fontSize: 12, color: "#dc2626", fontWeight: 500 }}>
+                        <span
+                          style={{
+                            fontSize: 12,
+                            color: "#dc2626",
+                            fontWeight: 500,
+                          }}
+                        >
                           Missing required docs:{" "}
                           {missingDocs.map((t) => DOC_LABEL[t] || t).join(", ")}
                         </span>
@@ -893,13 +1043,23 @@ export default function VendorForm() {
                       <button
                         style={{
                           ...S.submitBtn,
-                          opacity: (allUploaded || !needsSubmit) && !submitting ? 1 : 0.45,
-                          cursor: (allUploaded || !needsSubmit) && !submitting ? "pointer" : "not-allowed",
+                          opacity:
+                            (allUploaded || !needsSubmit) && !submitting
+                              ? 1
+                              : 0.45,
+                          cursor:
+                            (allUploaded || !needsSubmit) && !submitting
+                              ? "pointer"
+                              : "not-allowed",
                         }}
                         disabled={(needsSubmit && !allUploaded) || submitting}
                         onClick={handleFinish}
                       >
-                        {submitting ? "⏳ Submitting..." : needsSubmit ? "✓ Submit for Approval" : "✓ Done"}
+                        {submitting
+                          ? "⏳ Submitting..."
+                          : needsSubmit
+                            ? "✓ Submit for Approval"
+                            : "✓ Done"}
                       </button>
                     </div>
                   )}
@@ -922,7 +1082,9 @@ const Field = ({ label, error, children, fullWidth }) => (
       gap: 6,
     }}
   >
-    <label style={{ fontSize: 13, fontWeight: 600, color: "#475569" }}>{label}</label>
+    <label style={{ fontSize: 13, fontWeight: 600, color: "#475569" }}>
+      {label}
+    </label>
     {children}
     {error && <span style={{ fontSize: 12, color: "#dc2626" }}>{error}</span>}
   </div>
@@ -950,7 +1112,11 @@ const S = {
     boxShadow: "0 1px 6px rgba(0,0,0,0.08)",
     overflow: "hidden",
   },
-  tabs: { display: "flex", borderBottom: `1px solid ${C.border}`, overflowX: "auto" },
+  tabs: {
+    display: "flex",
+    borderBottom: `1px solid ${C.border}`,
+    overflowX: "auto",
+  },
   tab: {
     flex: 1,
     padding: "14px 12px",
@@ -968,7 +1134,11 @@ const S = {
     minWidth: 130,
     position: "relative",
   },
-  tabActive: { color: C.accent, borderBottom: `2px solid ${C.accent}`, fontWeight: 700 },
+  tabActive: {
+    color: C.accent,
+    borderBottom: `2px solid ${C.accent}`,
+    fontWeight: 700,
+  },
   tabNum: {
     width: 22,
     height: 22,
@@ -1014,7 +1184,11 @@ const S = {
     background: "#fff",
   },
   inputError: { borderColor: "#dc2626", background: "#fef2f2" },
-  inputDisabled: { background: "#f1f5f9", color: "#64748b", cursor: "not-allowed" },
+  inputDisabled: {
+    background: "#f1f5f9",
+    color: "#64748b",
+    cursor: "not-allowed",
+  },
   textarea: { minHeight: 80, resize: "vertical", fontFamily: "inherit" },
   hint: { fontSize: 11, color: "#94a3b8", marginTop: 2 },
   infoBox: {
