@@ -1,5 +1,7 @@
 // ============================================================
-// FRONTEND: src/pages/Vendors.jsx
+// FRONTEND: src/pages/Vendors.jsx  —  REPLACE WHOLE FILE (Phase 4)
+// Vendor Master: "🗂 Master" chip, Source filter (masterLink), Draft
+// approval state shown and filterable (was an empty badge).
 // ============================================================
 import React from "react";
 import { useState, useEffect, useCallback } from "react";
@@ -53,6 +55,7 @@ export default function Vendors() {
       category: "",
       branch: "",
       approvalStatus: searchParams.get("approvalStatus") || "",
+      masterLink: "",
     };
     if (Object.values(urlFilters).some((v) => v)) return urlFilters;
     return { ...urlFilters, ...(savedState.filters || {}) };
@@ -106,6 +109,7 @@ export default function Vendors() {
         ...(filters.approvalStatus && {
           approvalStatus: filters.approvalStatus,
         }),
+        ...(filters.masterLink && { masterLink: filters.masterLink }),
         ...extra,
       }),
     [search, filters],
@@ -308,9 +312,23 @@ export default function Vendors() {
             }}
           >
             <option value="">All Approval Status</option>
+            <option value="draft">Draft</option>
             <option value="pending_approval">Pending Approval</option>
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
+          </select>
+          {/* ✅ Vendor Master: where the vendor's details live */}
+          <select
+            style={S.select}
+            value={filters.masterLink || ""}
+            onChange={(e) => {
+              setFilters((f) => ({ ...f, masterLink: e.target.value }));
+              setPage(1);
+            }}
+          >
+            <option value="">All Sources</option>
+            <option value="linked">Vendor Master</option>
+            <option value="local">Branch record only</option>
           </select>
           <button
             style={S.resetBtn}
@@ -321,6 +339,7 @@ export default function Vendors() {
                 category: "",
                 branch: "",
                 approvalStatus: "",
+                masterLink: "",
               });
               setPage(1);
             }}
@@ -371,7 +390,17 @@ export default function Vendors() {
                   return (
                     <tr key={v._id} style={S.tr}>
                       <td style={S.td}>
-                        <div style={S.vendorName}>{v.vendorName}</div>
+                        <div style={S.vendorName}>
+                          {v.vendorName}
+                          {v.vendorMaster && (
+                            <span
+                              style={S.masterChip}
+                              title="Details and documents are shared from the Vendor Master"
+                            >
+                              🗂 Master
+                            </span>
+                          )}
+                        </div>
                         <div style={S.vendorSub}>
                           {v.contactPerson || v.mobile}
                         </div>
@@ -431,10 +460,12 @@ export default function Vendors() {
                                 ? { background: "#f0fdf4", color: "#16a34a" }
                                 : v.approvalStatus === "rejected"
                                   ? { background: "#fef2f2", color: "#dc2626" }
-                                  : {
-                                      background: "#fffbeb",
-                                      color: "#d97706",
-                                    }),
+                                  : v.approvalStatus === "draft"
+                                    ? { background: "#f1f5f9", color: "#64748b" }
+                                    : {
+                                        background: "#fffbeb",
+                                        color: "#d97706",
+                                      }),
                             }}
                           >
                             {
@@ -442,6 +473,7 @@ export default function Vendors() {
                                 approved: "✓ Approved",
                                 rejected: "✗ Rejected",
                                 pending_approval: "⏳ Pending",
+                                draft: "Draft",
                               }[v.approvalStatus]
                             }
                           </span>
@@ -763,6 +795,18 @@ const C = {
   danger: "#dc2626",
 };
 const S = {
+  masterChip: {
+    display: "inline-block",
+    marginLeft: 6,
+    padding: "1px 7px",
+    borderRadius: 10,
+    background: "#f5f3ff",
+    color: "#6d28d9",
+    border: "1px solid #ddd6fe",
+    fontSize: 10,
+    fontWeight: 700,
+    verticalAlign: "middle",
+  },
   layout: { display: "flex", minHeight: "100vh", background: "#f8fafc" },
   main: { flex: 1, padding: "24px 28px", overflowX: "hidden" },
   topBar: {

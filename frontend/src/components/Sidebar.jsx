@@ -1,3 +1,7 @@
+// ============================================================
+// FRONTEND: src/components/Sidebar.jsx  —  REPLACE WHOLE FILE
+// Vendor Master, Phase 2: one nav item above "Vendors".
+// ============================================================
 import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -15,6 +19,13 @@ const navItems = [
     path: "/payments",
     icon: "💳",
     roles: ["all"],
+  },
+  // ✅ Vendor Master — group-level record per PAN (req 6: accounts/admin)
+  {
+    label: "Vendor Master",
+    path: "/vendor-masters",
+    icon: "🗂️",
+    roles: ["accounts", "super_admin"],
   },
   {
     label: "Vendors",

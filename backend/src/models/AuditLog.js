@@ -1,3 +1,6 @@
+// ✅ VENDOR MASTER CHANGE: "VendorMaster" added to the targetModel enum.
+// Without it every audit write for the new module fails enum validation,
+// and logAction swallows the error — the entries would simply vanish.
 // ============================================================
 // BACKEND: src/models/AuditLog.js — REPLACE WHOLE FILE
 // ------------------------------------------------------------
@@ -42,6 +45,7 @@ const auditLogSchema = new mongoose.Schema(
         "InvoiceRequest",
         "PaymentProcessing",
         "Vendor",
+        "VendorMaster", // ✅ Vendor Master — required, see header
         "Branch",
         "Budget",
         "User",

@@ -1,6 +1,14 @@
+// ============================================================
+// FRONTEND: src/pages/VendorDetail.jsx  —  REPLACE WHOLE FILE (Phase 4)
+// Vendor Master: "Linked to the Vendor Master" banner, documents labelled
+// as held in the master, GSTIN labelled per branch, one-time flash
+// message after Add Vendor. Also fixes drafts showing "Pending Approval".
+// A linked vendor also lists the files its branch still holds itself
+// ("This branch's own documents"), read-only.
+// ============================================================
 import { useState, useEffect } from "react";
 import React from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
@@ -15,6 +23,16 @@ export default function VendorDetail() {
   const [rejectReason, setRejectReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  // One-time message passed by Add Vendor ("added to your branch…")
+  const location = useLocation();
+  const [flash, setFlash] = useState(location.state?.flash || "");
+  // Clear it from history so a reload / Back doesn't show it again.
+  useEffect(() => {
+    if (location.state?.flash) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const canEdit = ["branch_user", "accounts", "super_admin"].includes(
     user?.role,
@@ -139,7 +157,9 @@ export default function VendorDetail() {
                   ? "✓ Approved"
                   : vendor.approvalStatus === "rejected"
                     ? "✗ Rejected"
-                    : "⏳ Pending Approval"}
+                    : vendor.approvalStatus === "draft"
+                      ? "Draft — not submitted"
+                      : "⏳ Pending Approval"}
               </span>
             </div>
             <div style={S.meta}>
@@ -164,28 +184,47 @@ export default function VendorDetail() {
                 ✏️ Edit Vendor
               </button>
             )}
-            {canApprove && vendor.approvalStatus === "pending_approval" && (
-              <>
+            {/* A branch vendor that mirrors a master which is not approved
+                yet can't be approved on its own (the server refuses); it is
+                approved together with the master. */}
+            {canApprove &&
+              vendor.approvalStatus === "pending_approval" &&
+              vendor.vendorMaster &&
+              vendor.vendorMaster.approvalStatus !== "approved" && (
                 <button
-                  style={S.rejectBtn}
-                  onClick={() => {
-                    setActionModal("reject");
-                    setError("");
-                  }}
+                  style={S.editBtn}
+                  onClick={() =>
+                    navigate(`/vendor-masters/${vendor.vendorMaster._id}`)
+                  }
                 >
-                  ✗ Reject
+                  Approve via Vendor Master →
                 </button>
-                <button
-                  style={S.approveBtn}
-                  onClick={() => {
-                    setActionModal("approve");
-                    setError("");
-                  }}
-                >
-                  ✓ Approve
-                </button>
-              </>
-            )}
+              )}
+            {canApprove &&
+              vendor.approvalStatus === "pending_approval" &&
+              (!vendor.vendorMaster ||
+                vendor.vendorMaster.approvalStatus === "approved") && (
+                <>
+                  <button
+                    style={S.rejectBtn}
+                    onClick={() => {
+                      setActionModal("reject");
+                      setError("");
+                    }}
+                  >
+                    ✗ Reject
+                  </button>
+                  <button
+                    style={S.approveBtn}
+                    onClick={() => {
+                      setActionModal("approve");
+                      setError("");
+                    }}
+                  >
+                    ✓ Approve
+                  </button>
+                </>
+              )}
             {canApprove && vendor.approvalStatus === "approved" && (
               <button
                 style={S.rejectBtn}
@@ -215,6 +254,45 @@ export default function VendorDetail() {
               onClick={() => setError("")}
             >
               ✕
+            </button>
+          </div>
+        )}
+
+        {flash && (
+          <div style={S.flashBox}>
+            <span>{flash}</span>
+            <button style={S.flashClose} onClick={() => setFlash("")}>
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* ✅ Vendor Master link */}
+        {vendor.sourceOfTruth === "master" && vendor.vendorMaster && (
+          <div style={S.masterBanner}>
+            <div>
+              <strong>🗂 Linked to the Vendor Master</strong>
+              {vendor.vendorMaster.status &&
+                vendor.vendorMaster.status !== "active" && (
+                  <span style={S.masterWarn}>
+                    {" "}
+                    · {vendor.vendorMaster.status} at group level — cannot be
+                    used for new invoices
+                  </span>
+                )}
+              <div style={{ marginTop: 3 }}>
+                Name, PAN, bank details and documents are shared by every branch
+                and maintained by the accounts team. This branch keeps its own
+                category and GSTIN.
+              </div>
+            </div>
+            <button
+              style={S.masterBtn}
+              onClick={() =>
+                navigate(`/vendor-masters/${vendor.vendorMaster._id}`)
+              }
+            >
+              {canApprove ? "Open in Vendor Master →" : "View master →"}
             </button>
           </div>
         )}
@@ -258,7 +336,11 @@ export default function VendorDetail() {
             <Row label="Company" value={vendor.companyName || "—"} />
             <Row label="Category" value={vendor.vendorCategory} />
             <Row label="PAN Number" value={vendor.panNumber} mono />
-            <Row label="GST Number" value={vendor.gstNumber || "—"} mono />
+            <Row
+              label="GSTIN (this branch)"
+              value={vendor.gstNumber || "—"}
+              mono
+            />
             <Row label="MSME Number" value={vendor.msmeNumber || "—"} />
             <Row label="Address" value={vendor.businessAddress || "—"} />
           </InfoCard>
@@ -296,7 +378,13 @@ export default function VendorDetail() {
         </div>
 
         {/* Documents */}
-        <InfoCard title="📄 Documents">
+        <InfoCard
+          title={
+            vendor.documentsSource === "master"
+              ? "📄 Documents — held once in the Vendor Master"
+              : "📄 Documents"
+          }
+        >
           {vendor.documents?.length > 0 ? (
             <div style={S.docGrid}>
               {vendor.documents.map((doc, i) => (
@@ -332,6 +420,58 @@ export default function VendorDetail() {
               No documents uploaded yet.
             </div>
           )}
+
+          {vendor.documentsSource === "master" &&
+            vendor.branchDocuments?.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <div
+                  style={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: "#475569",
+                    marginBottom: 4,
+                  }}
+                >
+                  This branch's own documents
+                </div>
+                <div
+                  style={{ fontSize: 12, color: "#94a3b8", marginBottom: 10 }}
+                >
+                  Uploaded by this branch before it was linked to the Vendor
+                  Master — for example the GST certificate of this branch's own
+                  GSTIN. Read-only.
+                </div>
+                <div style={S.docGrid}>
+                  {vendor.branchDocuments.map((doc, i) => (
+                    <div key={doc._id || i} style={S.docItem}>
+                      <span style={{ fontSize: 24 }}>🗂</span>
+                      <div>
+                        <div
+                          style={{
+                            fontSize: 13,
+                            fontWeight: 600,
+                            color: "#334155",
+                          }}
+                        >
+                          {doc.name}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#94a3b8" }}>
+                          {doc.type}
+                        </div>
+                      </div>
+                      <a
+                        href={doc.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        style={S.downloadLink}
+                      >
+                        Download
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
         </InfoCard>
       </main>
 
@@ -484,6 +624,51 @@ const IC = {
 
 const C = { primary: "#1a3c6e", accent: "#2563eb", border: "#e2e8f0" };
 const S = {
+  flashBox: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    background: "#f0fdf4",
+    border: "1px solid #bbf7d0",
+    borderRadius: 8,
+    padding: "10px 14px",
+    color: "#15803d",
+    fontSize: 13,
+    marginBottom: 16,
+  },
+  flashClose: {
+    background: "none",
+    border: "none",
+    cursor: "pointer",
+    color: "#15803d",
+    fontWeight: 700,
+  },
+  masterBanner: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 14,
+    flexWrap: "wrap",
+    background: "#f5f3ff",
+    border: "1px solid #ddd6fe",
+    borderRadius: 10,
+    padding: "12px 16px",
+    fontSize: 13,
+    color: "#4c1d95",
+    marginBottom: 16,
+  },
+  masterWarn: { color: "#dc2626", fontWeight: 600 },
+  masterBtn: {
+    padding: "8px 14px",
+    background: "#fff",
+    color: "#5b21b6",
+    border: "1px solid #ddd6fe",
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    whiteSpace: "nowrap",
+  },
   layout: { display: "flex", minHeight: "100vh", background: "#f8fafc" },
   main: { flex: 1, padding: "24px 28px" },
   loading: { padding: 60, textAlign: "center", color: "#94a3b8" },

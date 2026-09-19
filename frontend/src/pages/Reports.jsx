@@ -1,3 +1,5 @@
+// Vendor Master, Phase 5 — REPLACE WHOLE FILE. Top Vendors now ranks the
+// real vendor across branches; shows "N branches" when more than one.
 import { useState, useEffect, useCallback } from "react";
 import React from "react";
 import api from "../api/axios";
@@ -561,6 +563,12 @@ export default function Reports() {
                             </div>
                             <div style={{ fontSize: 12, color: "#94a3b8" }}>
                               {v.vendor?.companyName}
+                              {v.branchCount > 1 && (
+                                <span style={{ color: "#6d28d9", fontWeight: 600 }}>
+                                  {v.vendor?.companyName ? " · " : ""}
+                                  {v.branchCount} branches
+                                </span>
+                              )}
                             </div>
                           </td>
                           <td style={S.td}>

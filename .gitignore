@@ -2,5 +2,7 @@
 .env
 backend/.env
 frontend/.env
-
+*.json
+*.csv
+*.gz
 backend/painscore-2ff3b-2919f14c317c.json

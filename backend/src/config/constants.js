@@ -1,3 +1,12 @@
+// ============================================================
+// BACKEND: src/config/constants.js  —  REPLACE WHOLE FILE
+// ============================================================
+// Change vs previous version: VENDOR_MASTER, MASTER_OWNED_FIELDS and
+// GST_STATE_CODES appended at the end. Everything above them is unchanged.
+// Revision 19 Sep: gstNumber is BRANCH-level (one GSTIN per state), not
+// master-owned; the master keeps a primary GSTIN plus the full list.
+// ============================================================
+
 module.exports = {
   ROLES: {
     SUPER_ADMIN: "super_admin",
@@ -109,4 +118,89 @@ module.exports = {
       requiredDocs: [],
     },
   },
+
+  // ── VENDOR MASTER ────────────────────────────────────────
+  // Behaviour flags for the PAN-keyed VendorMaster collection.
+  VENDOR_MASTER: {
+    // true  = linking a branch to an ALREADY-APPROVED master creates the
+    //         branch Vendor row as "approved" straight away. The KYC review
+    //         that matters happened once, at master level.
+    // false = every branch link waits in the accounts queue (the stricter
+    //         reading of requirement 7).
+    // A brand-new PAN ALWAYS goes to accounts for approval either way.
+    autoApproveLinkToApprovedMaster: true,
+
+    // Folder under uploads/ where master KYC documents are stored once.
+    // Branch rows with sourceOfTruth === "master" hold no files of their own.
+    documentFolder: "vendor-masters",
+
+    // Document types a master must carry before it can be submitted.
+    // "gst" is appended at runtime when the master has a GST number,
+    // mirroring the existing rule in vendorController.submitVendor.
+    requiredDocsByType: {
+      standard: ["pan", "cheque"],
+      statutory: [],
+    },
+
+    // Canonical identity-key formats. Kept here so lookup, create and the
+    // backfill script can never disagree about what a valid PAN looks like.
+    PAN_REGEX: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
+    IFSC_REGEX: /^[A-Z]{4}0[A-Z0-9]{6}$/,
+    GST_REGEX: /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d][Z][A-Z\d]$/,
+  },
+
+  // Fields each BRANCH vendor keeps for itself even when it is linked to a
+  // master. The sync never overwrites them.
+  //   vendorCategory — each branch may classify the vendor differently
+  //   gstNumber      — GST is registered per STATE: one PAN can hold a
+  //                    Maharashtra GSTIN (27…) for Pune and a Gujarat GSTIN
+  //                    (24…) for Ahmedabad. Overwriting it would put the
+  //                    wrong GSTIN on a branch's input-tax-credit records.
+  // The master keeps a primary GSTIN plus the list of every GSTIN its
+  // branches use (VendorMaster.gstins), for reporting.
+  BRANCH_LEVEL_FIELDS: ["vendorCategory", "gstNumber"],
+
+  // GSTIN characters 1–2 = state code.
+  GST_STATE_CODES: {
+  "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab",
+  "04": "Chandigarh", "05": "Uttarakhand", "06": "Haryana", "07": "Delhi",
+  "08": "Rajasthan", "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim",
+  "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur",
+  "15": "Mizoram", "16": "Tripura", "17": "Meghalaya", "18": "Assam",
+  "19": "West Bengal", "20": "Jharkhand", "21": "Odisha",
+  "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
+  "26": "Dadra & Nagar Haveli and Daman & Diu", "27": "Maharashtra",
+  "29": "Karnataka", "30": "Goa", "31": "Lakshadweep", "32": "Kerala",
+  "33": "Tamil Nadu", "34": "Puducherry", "35": "Andaman & Nicobar Islands",
+  "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh",
+  "97": "Other Territory",
+},
+
+  // Fields a VendorMaster owns outright. On the branch Vendor row these are
+  // a synced COPY: written when the branch links to the master, and rewritten
+  // across every linked row whenever the master is edited.
+  //
+  // Two consumers, and both matter:
+  //   1. syncMasterToBranchVendors() builds its $set from this list.
+  //   2. updateVendor() strips these keys from req.body when the row is
+  //      master-owned and the caller is not accounts/super_admin (req 6).
+  //
+  // vendorCategory and gstNumber are deliberately ABSENT — see
+  // BRANCH_LEVEL_FIELDS above.
+  MASTER_OWNED_FIELDS: [
+    "vendorName",
+    "contactPerson",
+    "mobile",
+    "email",
+    "companyName",
+    "panNumber",
+    "msmeNumber",
+    "businessAddress",
+    "vendorType",
+    "accountHolderName",
+    "bankName",
+    "accountNumber",
+    "ifscCode",
+    "upiId",
+  ],
 };

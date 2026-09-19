@@ -1,4 +1,11 @@
 // ============================================================
+// Vendor Master, Phase 5 — REPLACE WHOLE FILE. Vendor counts, top vendor,
+// concentration % and the duplicate-invoice audit flag now group on the
+// REAL vendor (Vendor Master → PAN → branch row; utils/vendorIdentity.js).
+// Before, the same supplier used by five branches counted as five vendors
+// and its concentration share was split five ways. Nothing else changed.
+// ============================================================
+// ============================================================
 // BACKEND: src/controllers/expenseSubtypeController.js — NEW FILE
 // ------------------------------------------------------------
 // Subtype (ExpenseCategory) wise expense report for the accounts and
@@ -17,6 +24,7 @@ const mongoose = require("mongoose");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const Branch = require("../models/Branch");
 const { REPORT_TZ, BRANCH_SCOPED_ROLES } = require("../config/reportConfig");
+const { vendorIdentityStages } = require("../utils/vendorIdentity");
 
 const toId = (v) =>
   mongoose.isValidObjectId(v) ? new mongoose.Types.ObjectId(String(v)) : null;
@@ -120,6 +128,9 @@ exports.getSubtypeReport = async (req, res) => {
         },
       },
       { $unwind: { path: "$payment", preserveNullAndEmptyArrays: true } },
+      // ✅ Vendor Master: one identity per REAL vendor (master → PAN → row),
+      // so a vendor used by five branches counts once, not five times.
+      ...vendorIdentityStages("vendor"),
       {
         $set: {
           paidAmount: { $ifNull: ["$payment.paidAmount", 0] },
@@ -152,7 +163,7 @@ exports.getSubtypeReport = async (req, res) => {
       categoryStatus: { $first: "$category.status" },
 
       invoices: { $sum: 1 },
-      vendorSet: { $addToSet: "$vendor" },
+      vendorSet: { $addToSet: "$vendorKey" },
 
       baseAmount: { $sum: { $ifNull: ["$amount", 0] } },
       gstAmount: { $sum: { $ifNull: ["$gstAmount", 0] } },
@@ -228,44 +239,33 @@ exports.getSubtypeReport = async (req, res) => {
           vendorSplit: [
             {
               $group: {
-                _id: { category: "$expenseCategory", vendor: "$vendor" },
+                _id: { category: "$expenseCategory", vendor: "$vendorKey" },
                 netPayable: { $sum: { $ifNull: ["$netPayable", 0] } },
-              },
-            },
-            {
-              $lookup: {
-                from: "vendors",
-                localField: "_id.vendor",
-                foreignField: "_id",
-                as: "v",
+                vendorName: { $first: "$vendorLabel" },
               },
             },
             { $sort: { netPayable: -1 } },
           ],
 
-          // Same invoice number twice for the same vendor
+          // Same invoice number twice for the same REAL vendor under the
+          // same GSTIN — now also across branches (the bill paid twice).
           duplicates: [
             {
               $group: {
                 _id: {
-                  vendor: "$vendor",
-                  invoiceNumber: { $toUpper: "$invoiceNumber" },
+                  vendor: "$vendorKey",
+                  gst: "$vendorGst",
+                  invoiceNumber: { $toUpper: { $trim: { input: { $ifNull: ["$invoiceNumber", ""] } } } },
                 },
                 count: { $sum: 1 },
                 netPayable: { $sum: { $ifNull: ["$netPayable", 0] } },
                 requestIds: { $push: "$requestId" },
                 categoryName: { $first: "$category.name" },
+                vendorName: { $first: "$vendorLabel" },
+                branchCount: { $addToSet: "$branch" },
               },
             },
-            { $match: { count: { $gt: 1 } } },
-            {
-              $lookup: {
-                from: "vendors",
-                localField: "_id.vendor",
-                foreignField: "_id",
-                as: "v",
-              },
-            },
+            { $match: { count: { $gt: 1 }, "_id.invoiceNumber": { $ne: "" } } },
             { $sort: { netPayable: -1 } },
             { $limit: 50 },
           ],
@@ -295,7 +295,7 @@ exports.getSubtypeReport = async (req, res) => {
       categoryTotal[cid] = (categoryTotal[cid] || 0) + v.netPayable;
       if (!topVendor[cid]) {
         topVendor[cid] = {
-          name: v.v?.[0]?.vendorName || "Unknown",
+          name: v.vendorName || "Unknown",
           amount: v.netPayable,
         };
       }
@@ -388,7 +388,8 @@ exports.getSubtypeReport = async (req, res) => {
       })),
       auditFlags: {
         duplicateInvoiceNumbers: (result.duplicates || []).map((d) => ({
-          vendor: d.v?.[0]?.vendorName || "Unknown",
+          vendor: d.vendorName || "Unknown",
+          crossBranch: (d.branchCount || []).length > 1,
           invoiceNumber: d._id.invoiceNumber,
           category: d.categoryName || "—",
           count: d.count,

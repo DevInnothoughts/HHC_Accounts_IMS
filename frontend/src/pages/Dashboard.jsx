@@ -1,3 +1,6 @@
+// Vendor Master, Phase 5 — REPLACE WHOLE FILE. Vendor section: two
+// Vendor Master tiles (distinct vendors across the group, new vendors
+// awaiting approval); branch tiles relabelled as branch records.
 // ============================================================
 // FRONTEND: src/pages/Dashboard.jsx — Complete Rewrite
 // ============================================================
@@ -349,15 +352,33 @@ export default function Dashboard() {
                 gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
               }}
             >
+              {ven.masters && (
+                <>
+                  <StatCard
+                    label="Vendors (group)"
+                    value={fmtNum(ven.masters.total)}
+                    icon="🗂️"
+                    color="#6d28d9"
+                    onClick={() => navigate("/vendor-masters")}
+                  />
+                  <StatCard
+                    label="New Vendors Pending"
+                    value={fmtNum(ven.masters.pending)}
+                    icon="🆕"
+                    color="#7c3aed"
+                    onClick={() => navigate("/vendor-masters")}
+                  />
+                </>
+              )}
               <StatCard
-                label="Total Vendors"
+                label="Branch Vendor Records"
                 value={fmtNum(ven.total)}
                 icon="🏢"
                 color="#1a3c6e"
                 onClick={() => navigate("/vendors")}
               />
               <StatCard
-                label="Pending Approval"
+                label="Branch Vendors Pending"
                 value={fmtNum(ven.pending)}
                 icon="⏳"
                 color="#d97706"

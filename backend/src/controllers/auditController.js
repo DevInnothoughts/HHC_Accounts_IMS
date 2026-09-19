@@ -46,6 +46,14 @@ const TARGETS = {
     route: (id) => `/vendors/${id}`,
     noun: "vendor",
   },
+  // ✅ Vendor Master
+  VendorMaster: {
+    model: () => require("../models/VendorMaster"),
+    select: "vendorName companyName panNumber approvalStatus status",
+    label: (d) => `${d.vendorName}${d.panNumber ? ` (${d.panNumber})` : ""}`,
+    route: (id) => `/vendor-masters/${id}`,
+    noun: "vendor master",
+  },
   Branch: {
     model: () => require("../models/Branch"),
     select: "name code status",
@@ -103,6 +111,20 @@ const VERBS = {
   APPROVE_VENDOR: "approved",
   REJECT_VENDOR: "rejected",
   DELETE_VENDOR: "deleted",
+  // ✅ Vendor Master
+  CREATE_VENDOR_MASTER: "added",
+  UPDATE_VENDOR_MASTER: "edited",
+  SUBMIT_VENDOR_MASTER: "submitted",
+  APPROVE_VENDOR_MASTER: "approved",
+  REJECT_VENDOR_MASTER: "rejected",
+  LINK_VENDOR_MASTER: "added a branch to",
+  ATTACH_VENDOR_TO_MASTER: "attached a branch record to",
+  SYNC_FROM_VENDOR_MASTER: "synced master details into",
+  LOOKUP_VENDOR_MASTER: "looked up PAN for",
+  UPLOAD_VENDOR_MASTER_DOCUMENT: "uploaded a document to",
+  DELETE_VENDOR_MASTER_DOCUMENT: "deleted a document from",
+  DELETE_VENDOR_DOCUMENT: "deleted a document from",
+  EXPORT_VENDOR_MASTER_EXCEL: "exported",
   CREATE_BRANCH: "created",
   UPDATE_BRANCH: "edited",
   CREATE_BUDGET: "created",
@@ -182,8 +204,12 @@ const resolveTargets = async (logs) => {
           .model()
           .find({ _id: { $in: [...ids].map(toId).filter(Boolean) } })
           .select(cfg.select)
-          .populate("branch", "name")
-          .populate("vendor", "vendorName")
+          // ✅ strictPopulate:false — not every module has these paths
+          // (Vendor, VendorMaster, User, SLA...). Mongoose 8 throws on
+          // populating an undeclared path, which was silently dropping
+          // every non-invoice/payment row out of target resolution.
+          .populate({ path: "branch", select: "name", strictPopulate: false })
+          .populate({ path: "vendor", select: "vendorName", strictPopulate: false })
           .lean();
         docs.forEach((d) => {
           resolved[`${mod}|${d._id}`] = d;
@@ -332,16 +358,16 @@ exports.getAuditTrail = async (req, res) => {
 
     if (id && toId(id)) {
       doc = await Model.findById(id)
-        .populate("branch", "name")
-        .populate("vendor", "vendorName")
-        .populate("createdBy", "name role")
+        .populate({ path: "branch", select: "name", strictPopulate: false })
+        .populate({ path: "vendor", select: "vendorName", strictPopulate: false })
+        .populate({ path: "createdBy", select: "name role", strictPopulate: false })
         .lean();
     } else if (ref) {
       const field = type === "Payment" ? "paymentId" : "requestId";
       doc = await Model.findOne({ [field]: String(ref).trim().toUpperCase() })
-        .populate("branch", "name")
-        .populate("vendor", "vendorName")
-        .populate("createdBy", "name role")
+        .populate({ path: "branch", select: "name", strictPopulate: false })
+        .populate({ path: "vendor", select: "vendorName", strictPopulate: false })
+        .populate({ path: "createdBy", select: "name role", strictPopulate: false })
         .lean();
     }
 

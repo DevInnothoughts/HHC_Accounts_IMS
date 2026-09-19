@@ -1,3 +1,7 @@
+// ============================================================
+// BACKEND: src/app.js  —  REPLACE WHOLE FILE
+// Change: one new mount, /api/vendor-masters, after /api/vendors.
+// ============================================================
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -93,6 +97,8 @@ const startServer = async () => {
     require("./middleware/auth").authenticate,
     require("./routes/vendors"),
   );
+  // ✅ Vendor Master — the router applies authenticate itself.
+  app.use("/api/vendor-masters", require("./routes/vendorMasters"));
 
   app.use("/api/payments", require("./routes/payments"));
   app.use(

@@ -1,3 +1,9 @@
+// ============================================================
+// FRONTEND: src/components/FileUpload.jsx  —  REPLACE WHOLE FILE
+// Vendor Master, Phase 2: entityType "vendormaster"; endpoint lookup maps
+// replace the payment/vendor ternaries; optional readOnlyMessage prop.
+// Existing callers (payment, vendor) behave exactly as before.
+// ============================================================
 import { useState, useRef } from "react";
 import React from "react";
 import api from "../api/axios";
@@ -19,14 +25,31 @@ const DOC_TYPES = {
     { value: "other", label: "📎 Other", required: false },
   ],
 };
+// ✅ Vendor Master — same document set as a branch vendor, stored once.
+DOC_TYPES.vendormaster = DOC_TYPES.vendor;
+
+// ✅ One entry per entity type. Previously a two-way ternary, which sent
+// anything that was not "payment" to the branch-vendor endpoint.
+const UPLOAD_ENDPOINTS = {
+  payment: (id) => `/uploads/payment/${id}/attachment`,
+  vendor: (id) => `/uploads/vendor/${id}/document`,
+  vendormaster: (id) => `/uploads/vendor-master/${id}/document`,
+};
+const DELETE_ENDPOINTS = {
+  payment: (id, doc) => `/uploads/payment/${id}/attachment/${doc._id}`,
+  vendor: (id, doc) => `/uploads/vendor/${id}/document/${doc.type}`,
+  vendormaster: (id, doc) =>
+    `/uploads/vendor-master/${id}/document/${doc.type}`,
+};
 
 export default function FileUpload({
-  entityType = "payment", // 'payment' | 'vendor'
+  entityType = "payment", // 'payment' | 'vendor' | 'vendormaster'
   entityId,
   existingDocs = [],
   onUploadSuccess,
   requiredTypes = null,
   canUpload = true,
+  readOnlyMessage = "Upload controls are only available to the branch user while editing this request.",
 }) {
   const [selectedDocType, setSelectedDocType] = useState("");
   const [uploading, setUploading] = useState(false);
@@ -42,10 +65,8 @@ export default function FileUpload({
   const isRequired = (dt) =>
     requiredTypes ? requiredTypes.includes(dt.value) : dt.required;
 
-  const uploadEndpoint =
-    entityType === "payment"
-      ? `/uploads/payment/${entityId}/attachment`
-      : `/uploads/vendor/${entityId}/document`;
+  const uploadEndpoint = (UPLOAD_ENDPOINTS[entityType] ||
+    UPLOAD_ENDPOINTS.payment)(entityId);
 
   // ── Core upload function ─────────────────────────────
   const doUpload = async (file, docType) => {
@@ -126,10 +147,8 @@ export default function FileUpload({
   const handleDelete = async (doc) => {
     if (!window.confirm(`Delete "${doc.name}"? This cannot be undone.`)) return;
 
-    const deleteEndpoint =
-      entityType === "payment"
-        ? `/uploads/payment/${entityId}/attachment/${doc._id}`
-        : `/uploads/vendor/${entityId}/document/${doc.type}`;
+    const deleteEndpoint = (DELETE_ENDPOINTS[entityType] ||
+      DELETE_ENDPOINTS.payment)(entityId, doc);
 
     setDeletingType(doc.type);
     try {
@@ -150,10 +169,7 @@ export default function FileUpload({
       <div style={S.title}>📎 Document Management</div>
 
       {!canUpload && (
-        <div style={S.readOnlyBanner}>
-          Upload controls are only available to the branch user while editing
-          this request.
-        </div>
+        <div style={S.readOnlyBanner}>{readOnlyMessage}</div>
       )}
 
       {error && (

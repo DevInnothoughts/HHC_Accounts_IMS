@@ -42,6 +42,7 @@ const MODULE_TO_MODEL = {
   Invoice: "InvoiceRequest",
   Payment: "PaymentProcessing",
   Vendor: "Vendor",
+  VendorMaster: "VendorMaster", // ✅ Vendor Master
   Branch: "Branch",
   Budget: "Budget",
   User: "User",

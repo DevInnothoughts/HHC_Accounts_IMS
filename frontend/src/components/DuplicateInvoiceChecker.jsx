@@ -1,3 +1,6 @@
+// Vendor Master, Phase 5 — REPLACE WHOLE FILE. Shows the branch of a
+// matching invoice, explains the new cross-branch duplicate block, and
+// shows the new "cross_branch_match" warning. Nothing else changed.
 // ============================================================
 // FRONTEND: src/components/DuplicateInvoiceChecker.jsx
 // ============================================================
@@ -38,6 +41,7 @@ export default function DuplicateInvoiceChecker({
         onChange?.(data);
       } catch (err) {
         console.error("Duplicate check error:", err.message);
+        setResult(null); // never leave a stale result for a different invoice number
       } finally {
         setChecking(false);
       }
@@ -63,9 +67,17 @@ export default function DuplicateInvoiceChecker({
       <div style={S.errorCard}>
         <div style={S.errorHeader}>🚨 Duplicate Invoice Detected</div>
         <p style={S.errorText}>
-          This invoice number already exists for this vendor.
+          {result.exactMatch?.crossBranch
+            ? `This vendor's invoice ${result.exactMatch?.invoiceNumber} (same GSTIN) was already raised by ${result.exactMatch?.branch}. Raising it again would pay the same bill twice.`
+            : "This invoice number already exists for this vendor."}
         </p>
         <div style={S.matchCard}>
+          {result.exactMatch?.branch && (
+            <div style={S.matchRow}>
+              <span style={S.matchLabel}>Branch</span>
+              <span style={S.matchVal}>{result.exactMatch.branch}</span>
+            </div>
+          )}
           <div style={S.matchRow}>
             <span style={S.matchLabel}>Request ID</span>
             <span style={S.matchVal}>{result.exactMatch?.requestId}</span>
@@ -99,7 +111,8 @@ export default function DuplicateInvoiceChecker({
 
   if (
     result.warning === "similar_found" ||
-    result.warning === "cross_vendor_match"
+    result.warning === "cross_vendor_match" ||
+    result.warning === "cross_branch_match"
   )
     return (
       <div style={S.warningCard}>
@@ -122,6 +135,12 @@ export default function DuplicateInvoiceChecker({
               <div style={S.matchRow}>
                 <span style={S.matchLabel}>Vendor</span>
                 <span style={S.matchVal}>{m.vendor}</span>
+              </div>
+            )}
+            {m.branch && (
+              <div style={S.matchRow}>
+                <span style={S.matchLabel}>Branch</span>
+                <span style={S.matchVal}>{m.branch}</span>
               </div>
             )}
             <div style={S.matchRow}>

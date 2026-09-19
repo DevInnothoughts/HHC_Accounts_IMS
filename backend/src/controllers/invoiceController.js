@@ -1,5 +1,24 @@
+// ============================================================
+// BACKEND: src/controllers/invoiceController.js  —  REPLACE WHOLE FILE
+// Vendor Master, Phase 2 + Phase 5. Changes are confined to the vendor
+// gate and duplicate checks; everything else is the current file.
+//  • vendorGate() — ONE rule for create AND edit. The vendor must:
+//      belong to the invoice's branch   (was never checked)
+//      be approved by accounts          (as before)
+//      be active at branch level        (was never checked — inactive,
+//                                        frozen, blacklisted vendors could
+//                                        still be invoiced)
+//      have an approved, active Vendor Master, if linked   (Phase 2)
+//  • updateInvoice runs the gate when the vendor or branch changes, and the
+//    duplicate check when the vendor, invoice number or amount changes.
+//    Previously an edit could switch to any vendor and any number.
+//  • Duplicate detection now spans branches of the same real vendor
+//    (services/duplicateInvoiceService.js).
+// ============================================================
+const mongoose = require("mongoose");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const Vendor = require("../models/Vendor");
+const VendorMaster = require("../models/VendorMaster");
 const User = require("../models/User");
 const {
   INVOICE_STATUS,
@@ -17,6 +36,67 @@ const {
   checkDuplicateInvoice,
 } = require("../services/duplicateInvoiceService");
 const { resolvePaymentCycle, toStoredShape } = require("../utils/paymentCycle");
+
+// ── Can this branch raise an invoice against this vendor right now? ──
+// Returns null when allowed, or { status, body } to send back.
+const vendorGate = async (vendorId, branchId) => {
+  if (!mongoose.isValidObjectId(vendorId))
+    return { status: 400, body: { message: "Select a valid vendor" } };
+  const v = await Vendor.findById(vendorId)
+    .select("vendorName approvalStatus status branch vendorMaster")
+    .lean();
+  if (!v) return { status: 404, body: { message: "Vendor not found" } };
+
+  if (branchId && String(v.branch) !== String(branchId)) {
+    return {
+      status: 400,
+      body: {
+        message: `Vendor "${v.vendorName}" is not in this branch's vendor list. Add it to the branch (Vendors → Add Vendor) first.`,
+      },
+    };
+  }
+  if (v.approvalStatus !== "approved") {
+    return {
+      status: 403,
+      body: {
+        message: `Vendor "${v.vendorName}" is not approved by accounts.`,
+        vendorApprovalStatus: v.approvalStatus,
+      },
+    };
+  }
+  if (v.status && v.status !== "active") {
+    return {
+      status: 403,
+      body: {
+        message: `Vendor "${v.vendorName}" is ${v.status} and cannot be invoiced.`,
+        vendorStatus: v.status,
+      },
+    };
+  }
+  // ✅ Vendor Master: a vendor frozen / blacklisted / unapproved at GROUP
+  // level cannot be invoiced by any branch, whatever its branch row says.
+  if (v.vendorMaster) {
+    const master = await VendorMaster.findById(v.vendorMaster)
+      .select("approvalStatus status")
+      .lean();
+    if (
+      !master ||
+      master.approvalStatus !== "approved" ||
+      master.status !== "active"
+    ) {
+      return {
+        status: 403,
+        body: {
+          message: master
+            ? `Vendor "${v.vendorName}" is ${master.status !== "active" ? master.status : "not approved"} in the Vendor Master and cannot be invoiced.`
+            : `Vendor "${v.vendorName}" is linked to a missing Vendor Master record.`,
+          vendorMasterStatus: master?.status,
+        },
+      };
+    }
+  }
+  return null;
+};
 
 const getWorkflowStep = (status) =>
   INVOICE_WORKFLOW.find((w) => w.status === status) || null;
@@ -73,15 +153,8 @@ exports.createInvoice = async (req, res) => {
   try {
     const { branch, vendor, expenseType, invoiceNumber, items } = req.body;
 
-    const vendorDoc = await Vendor.findById(vendor);
-    if (!vendorDoc)
-      return res.status(404).json({ message: "Vendor not found" });
-    if (vendorDoc.approvalStatus !== "approved") {
-      return res.status(403).json({
-        message: `Vendor "${vendorDoc.vendorName}" is not approved by accounts.`,
-        vendorApprovalStatus: vendorDoc.approvalStatus,
-      });
-    }
+    const gate = await vendorGate(vendor, branch);
+    if (gate) return res.status(gate.status).json(gate.body);
 
     // ✅ Build payload and derive totals from line items when provided
     const payload = { ...req.body };
@@ -670,6 +743,45 @@ exports.updateInvoice = async (req, res) => {
         : invoice.roundOff || 0;
     updateData.roundOff = roundOff;
     updateData.netPayable = +(baseAmt + gstAmt + roundOff).toFixed(2);
+
+    // ✅ Same vendor rules as createInvoice when the vendor or branch changes.
+    const newVendor = updateData.vendor ?? invoice.vendor;
+    const newBranch = updateData.branch ?? invoice.branch;
+    const vendorChanged = String(newVendor) !== String(invoice.vendor);
+    const branchChanged = String(newBranch) !== String(invoice.branch);
+    if (vendorChanged || branchChanged) {
+      const gate = await vendorGate(newVendor, newBranch);
+      if (gate) return res.status(gate.status).json(gate.body);
+    }
+
+    // ✅ Duplicate re-check only when the invoice's IDENTITY changes (vendor,
+    // branch or invoice number). An amount-only edit is not re-checked: the
+    // stored netPayable can differ from the recomputed one (TDS applied at
+    // approval, legacy items), and an old duplicate elsewhere must not
+    // block routine corrections to this invoice.
+    const newNumber = updateData.invoiceNumber ?? invoice.invoiceNumber;
+    const numKey = (n) =>
+      String(n || "")
+        .trim()
+        .toUpperCase();
+    if (
+      vendorChanged ||
+      branchChanged ||
+      numKey(newNumber) !== numKey(invoice.invoiceNumber)
+    ) {
+      const dupCheck = await checkDuplicateInvoice(
+        newBranch,
+        newVendor,
+        newNumber,
+        updateData.netPayable,
+        invoice._id,
+      );
+      if (dupCheck.isDuplicate) {
+        return res
+          .status(409)
+          .json({ message: "Duplicate invoice detected", duplicate: dupCheck });
+      }
+    }
 
     const updated = await InvoiceRequest.findByIdAndUpdate(
       req.params.id,

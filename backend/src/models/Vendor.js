@@ -1,3 +1,13 @@
+// ============================================================
+// BACKEND: src/models/Vendor.js  —  REPLACE WHOLE FILE
+// ============================================================
+// Change vs previous version: TWO new optional fields only
+// (vendorMaster, sourceOfTruth) + one new index. Every existing
+// field, validator, default and the existing index are byte-for-byte
+// unchanged, so every document already in the collection stays valid
+// and nothing needs rewriting.
+// ============================================================
+
 const mongoose = require("mongoose");
 
 const documentSchema = new mongoose.Schema({
@@ -94,10 +104,59 @@ const vendorSchema = new mongoose.Schema(
     },
     blacklistReason: { type: String },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+    // ────────────────────────────────────────────────────────
+    // ✅ VENDOR MASTER — additive only. Everything above is untouched.
+    // ────────────────────────────────────────────────────────
+
+    // When set, this row is the branch <-> master mapping for that
+    // VendorMaster. InvoiceRequest.vendor and PaymentProcessing.vendor
+    // still point HERE, not at the master — nothing is repointed.
+    // null on every pre-existing row, and on statutory payees that have
+    // no PAN to key a master on.
+    vendorMaster: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "VendorMaster",
+      default: null,
+    },
+
+    // "local"  = legacy / standalone row. Fields below are authoritative
+    //            and editable at branch level, exactly as before.
+    // "master" = fields listed in constants.MASTER_OWNED_FIELDS are a
+    //            synced COPY of the master and must not be edited here;
+    //            documents[] is empty and the master's are shown instead.
+    //
+    // Defaults to "local", so every existing document reads back
+    // correctly without being written to.
+    sourceOfTruth: {
+      type: String,
+      enum: ["local", "master"],
+      default: "local",
+    },
   },
   { timestamps: true },
 );
 
 vendorSchema.index({ branch: 1, panNumber: 1 });
+
+// ✅ NO index on vendorMaster is declared here, on purpose.
+// scripts/createVendorMasterIndexes.js creates ONE index that does both
+// jobs — enforces "a master may be linked to a branch only once" and
+// serves lookups by master:
+//
+//   { vendorMaster: 1, branch: 1 }
+//   unique, partialFilterExpression: { vendorMaster: { $type: "objectId" } }
+//
+// It is built there rather than here for the same reason
+// createReportIndexes.js exists: autoIndex would try to rebuild it on
+// every app boot against a large live collection. The partial filter is
+// what lets the thousands of legacy rows with vendorMaster: null coexist
+// under a unique index.
+
+// True when this row's core fields are owned by a VendorMaster and must
+// not be edited at branch level (requirement 6).
+vendorSchema.methods.isMasterOwned = function () {
+  return this.sourceOfTruth === "master" && Boolean(this.vendorMaster);
+};
 
 module.exports = mongoose.model("Vendor", vendorSchema);

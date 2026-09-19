@@ -1,9 +1,28 @@
 // ============================================================
+// Vendor Master, Phase 5 — REPLACE WHOLE FILE. Changes:
+//  • Top vendors ranked by REAL vendor across branches (+ branchCount)
+//  • Dashboard vendor stats add Vendor Master counts; "pending" no longer
+//    counts branch vendors that are approved together with their master
+//  • Accounts to-do: "New vendors (Vendor Master) awaiting approval"
+// Nothing else changed.
+// ============================================================
+// ============================================================
 // BACKEND: controllers/reportController.js — Complete Rewrite
 // ============================================================
 const InvoiceRequest = require("../models/InvoiceRequest");
 const PaymentProcessing = require("../models/PaymentProcessing");
 const Vendor = require("../models/Vendor");
+const VendorMaster = require("../models/VendorMaster");
+const { vendorIdentityStages } = require("../utils/vendorIdentity");
+
+// Masters that are not approved yet. A branch vendor waiting on one of
+// these is approved WITH the master, so it is not a separate to-do.
+// Masters awaiting accounts approval. Their linked branch rows are counted
+// under "New vendors pending" instead of "Branch vendors pending". Draft and
+// rejected masters are NOT included — their rows keep showing in the branch
+// counts rather than vanishing from every tile.
+const unapprovedMasterIds = () =>
+  VendorMaster.distinct("_id", { approvalStatus: "pending_approval" });
 const Branch = require("../models/Branch");
 const User = require("../models/User");
 const AuditLog = require("../models/AuditLog");
@@ -139,12 +158,21 @@ exports.getDashboardStats = async (req, res) => {
     // ── Vendor Stats (non-branch roles) ───────────────────
     let vendorStats = null;
     if (!["branch_user", "branch_partner"].includes(role)) {
-      const [totalVendors, pendingVendors, approvedVendors, rejectedVendors] =
+      const waitingOnMaster = await unapprovedMasterIds();
+      const [
+        totalVendors,
+        pendingVendors,
+        approvedVendors,
+        rejectedVendors,
+        masterTotal,
+        masterPending,
+      ] =
         await Promise.all([
           Vendor.countDocuments(branchFilter),
           Vendor.countDocuments({
             ...branchFilter,
             approvalStatus: "pending_approval",
+            vendorMaster: { $nin: waitingOnMaster },
           }),
           Vendor.countDocuments({
             ...branchFilter,
@@ -154,12 +182,18 @@ exports.getDashboardStats = async (req, res) => {
             ...branchFilter,
             approvalStatus: "rejected",
           }),
+          // Masters are group-wide: one per real vendor.
+          VendorMaster.countDocuments({}),
+          VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
         ]);
       vendorStats = {
+        // Branch vendor records (one per vendor per branch)
         total: totalVendors,
         pending: pendingVendors,
         approved: approvedVendors,
         rejected: rejectedVendors,
+        // ✅ Vendor Master — distinct real vendors
+        masters: { total: masterTotal, pending: masterPending },
       };
     }
 
@@ -225,7 +259,8 @@ async function getPendingActionsForRole(role, user) {
 
   // AFTER
   if (role === "accounts") {
-    const [invoiceApprove, paymentApprove, vendorApprove] = await Promise.all([
+    const waitingOnMaster = await unapprovedMasterIds();
+    const [invoiceApprove, paymentApprove, vendorApprove, masterApprove] = await Promise.all([
       InvoiceRequest.countDocuments({
         ...branchFilter,
         status: "Partner Approved",
@@ -237,7 +272,9 @@ async function getPendingActionsForRole(role, user) {
       Vendor.countDocuments({
         ...branchFilter,
         approvalStatus: "pending_approval",
+        vendorMaster: { $nin: waitingOnMaster },
       }),
+      VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
     ]);
     if (invoiceApprove > 0)
       actions.push({
@@ -253,11 +290,18 @@ async function getPendingActionsForRole(role, user) {
         path: "/payments",
         color: "#16a34a",
       });
+    if (masterApprove > 0)
+      actions.push({
+        label: "New vendors (Vendor Master) awaiting approval",
+        count: masterApprove,
+        path: "/vendor-masters",
+        color: "#7c3aed",
+      });
     if (vendorApprove > 0)
       actions.push({
-        label: "Vendors awaiting approval",
+        label: "Branch vendors awaiting approval",
         count: vendorApprove,
-        path: "/vendors",
+        path: "/vendors?approvalStatus=pending_approval",
         color: "#d97706",
       });
   }
@@ -442,26 +486,38 @@ exports.getFinancialReport = async (req, res) => {
     ]);
 
     // Top vendors by invoice amount
+    // ✅ Vendor Master: ranked by REAL vendor across branches, so a supplier
+    // billing five branches is one row with its full total, not five rows
+    // that may each miss the top ten. Response shape unchanged, plus
+    // branchCount.
     const topVendors = await InvoiceRequest.aggregate([
       { $match: invoiceMatch },
+      ...vendorIdentityStages("vendor"),
       {
         $group: {
-          _id: "$vendor",
+          _id: "$vendorKey",
           count: { $sum: 1 },
           totalAmount: { $sum: "$netPayable" },
+          vendorName: { $first: "$vendorLabel" },
+          companyName: { $first: "$vendorCompany" },
+          vendorCategory: { $first: "$vendorCategory" },
+          branches: { $addToSet: "$branch" },
         },
       },
-      {
-        $lookup: {
-          from: "vendors",
-          localField: "_id",
-          foreignField: "_id",
-          as: "vendor",
-        },
-      },
-      { $unwind: { path: "$vendor", preserveNullAndEmptyArrays: true } },
       { $sort: { totalAmount: -1 } },
       { $limit: 10 },
+      {
+        $project: {
+          count: 1,
+          totalAmount: 1,
+          branchCount: { $size: "$branches" },
+          vendor: {
+            vendorName: "$vendorName",
+            companyName: "$companyName",
+            vendorCategory: "$vendorCategory",
+          },
+        },
+      },
     ]);
 
     // Grand totals

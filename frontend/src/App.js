@@ -1,5 +1,6 @@
 // ============================================================
-// FRONTEND: src/App.jsx — Final Complete Version
+// FRONTEND: src/App.js — REPLACE WHOLE FILE
+// Vendor Master, Phase 2: 3 imports + 4 /vendor-masters routes.
 // ============================================================
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import React from "react";
@@ -15,6 +16,9 @@ import PaymentDetail from "./pages/PaymentDetail.jsx";
 import Vendors from "./pages/Vendors.jsx";
 import VendorForm from "./pages/VendorForm.jsx";
 import VendorDetail from "./pages/VendorDetail.jsx";
+import VendorMasters from "./pages/VendorMasters.jsx";
+import VendorMasterForm from "./pages/VendorMasterForm.jsx";
+import VendorMasterDetail from "./pages/VendorMasterDetail.jsx";
 import Reports from "./pages/Reports.jsx";
 import UserManagement from "./pages/UserManagement.jsx";
 import BranchManagement from "./pages/BranchManagement.jsx";
@@ -102,6 +106,46 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <PaymentDetail />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* ✅ Vendor Master — group-level, one record per PAN.
+              Static "/new" is declared before "/:id". */}
+          <Route
+            path="/vendor-masters"
+            element={
+              <ProtectedRoute roles={["accounts", "super_admin"]}>
+                <VendorMasters />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/vendor-masters/new"
+            element={
+              <ProtectedRoute roles={["accounts", "super_admin"]}>
+                <VendorMasterForm />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/vendor-masters/:id"
+            element={
+              <ProtectedRoute>
+                {/* Any role; the API masks it for branches that don't use it */}
+                <VendorMasterDetail />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/vendor-masters/:id/edit"
+            element={
+              <ProtectedRoute
+                roles={["branch_user", "accounts", "super_admin"]}
+              >
+                {/* branch_user: only their own draft/rejected record —
+                    enforced by the API and the form itself */}
+                <VendorMasterForm />
               </ProtectedRoute>
             }
           />
