@@ -7,6 +7,8 @@
 //   · draft/filters split so only Apply fires a request
 //   · per-section Excel export
 //   · subtype register tab
+//   · vendor analysis tab (VendorReport.jsx) — vendor-wise and
+//     branch-wise billing / payments, ageing, trend, vendor detail
 // ============================================================
 import { useState, useEffect, useCallback, useRef } from "react";
 import React from "react";
@@ -14,6 +16,7 @@ import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import SubtypeReport from "./SubtypeReport.jsx";
+import VendorReport from "./VendorReport.jsx";
 import { downloadExcel, filterMeta } from "../utils/exportExcel";
 
 const C = {
@@ -65,7 +68,11 @@ const TABS = [
   ["payment", "Payment processing"],
   ["expense", "Expense categories"],
   ["subtype", "Subtype register"],
+  ["vendor", "Vendor analysis"],
 ];
+
+// Tabs that carry their own filter bar and load their own data.
+const SELF_CONTAINED = ["subtype", "vendor"];
 
 const BLANK = {
   from: "",
@@ -171,8 +178,8 @@ export default function PrimaryReports() {
           </button>
         </div>
 
-        {/* Filters — the subtype tab carries its own, so hide these there */}
-        {tab !== "subtype" && (
+        {/* Filters — the subtype and vendor tabs carry their own */}
+        {!SELF_CONTAINED.includes(tab) && (
           <div style={S.filterBar}>
             <Field label="From">
               <input
@@ -273,7 +280,12 @@ export default function PrimaryReports() {
 
         {error && <div style={S.error}>{error}</div>}
 
-        {tab === "subtype" ? (
+        {tab === "vendor" ? (
+          <VendorReport
+            branches={options.branches}
+            categories={options.categories}
+          />
+        ) : tab === "subtype" ? (
           <SubtypeReport
             branches={options.branches.map((b) => ({
               branchId: b._id,

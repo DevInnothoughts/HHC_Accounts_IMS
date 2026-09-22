@@ -3,12 +3,15 @@
 // ------------------------------------------------------------
 // Every existing route is unchanged. Four new PRIMARY report routes
 // are appended below the existing block.
+// Vendor analysis (vendor-wise / branch-wise payments): two routes
+// appended at the end — /vendors and /vendors/detail.
 // ============================================================
 const router = require("express").Router();
 const ctrl = require("../controllers/reportController");
 const primary = require("../controllers/primaryReportController"); // ← NEW
 const subtype = require("../controllers/expenseSubtypeController"); // ← NEW
 const audit = require("../controllers/auditController"); // ← NEW
+const vendorReport = require("../controllers/vendorReportController"); // ← Vendor analysis
 const { authenticate } = require("../middleware/auth");
 const roleGuard = require("../middleware/roleGaurd");
 const { ROLES } = require("../config/constants");
@@ -107,6 +110,19 @@ router.get(
   "/expense-subtypes/:categoryId/invoices",
   roleGuard(...PRIMARY_REPORT_ROLES),
   subtype.getSubtypeInvoices,
+);
+
+// ── Vendor analysis (management + accounts) ────────────────
+// Static "/vendors/detail" first, so it is never read as a parameter.
+router.get(
+  "/vendors/detail",
+  roleGuard(...PRIMARY_REPORT_ROLES),
+  vendorReport.getVendorDetail,
+);
+router.get(
+  "/vendors",
+  roleGuard(...PRIMARY_REPORT_ROLES),
+  vendorReport.getVendorReport,
 );
 
 module.exports = router;
