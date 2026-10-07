@@ -125,4 +125,12 @@ router.get(
   vendorReport.getVendorReport,
 );
 
+// ── TDS (accounts) ─────────────────────────────────────────
+// Same roles and branch scoping as the other primary reports.
+router.get(
+  "/tds",
+  roleGuard(...PRIMARY_REPORT_ROLES),
+  require("../controllers/tdsReportController").getTdsReport,
+);
+
 module.exports = router;

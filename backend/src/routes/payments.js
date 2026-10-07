@@ -42,6 +42,17 @@ router.post(
   roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
   ctrl.bulkGenerateFedOneExcel,
 );
+// e-Net "Master Vendor Payment" bank sheet — same rules as FedOne.
+router.post(
+  "/:id/enet-excel",
+  roleGuard(ROLES.ACCOUNTS),
+  ctrl.generateEnetExcel,
+);
+router.post(
+  "/bulk-enet-excel",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.bulkGenerateEnetExcel,
+);
 // Invoice attachments, once the payment Excel exists. Read-only.
 router.post(
   "/bulk-documents",

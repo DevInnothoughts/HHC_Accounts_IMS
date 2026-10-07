@@ -16,6 +16,10 @@ const {
   validateForFedOne,
   resolveReference,
 } = require("../services/fedOneExcelService");
+const {
+  buildEnetWorkbook,
+  validateForEnet,
+} = require("../services/enetExcelService");
 const fs = require("fs");
 const path = require("path");
 const { createZipStream } = require("../services/zipStreamService");
@@ -1284,6 +1288,188 @@ exports.bulkGenerateFedOneExcel = async (req, res) => {
   } catch (err) {
     console.error("Bulk FedOne Excel error:", err);
     res.status(500).json({ message: "FedOne Excel generation failed" });
+  }
+};
+
+// ── e-Net "Master Vendor Payment" bank-upload sheet ───────
+// Same eligibility, branch scope, status transition, history and audit
+// as the FedOne export — only the file layout differs (enetExcelService).
+const ENET_POPULATE = [
+  {
+    path: "invoiceRequest",
+    select: "requestId invoiceNumber expenseCategory",
+    populate: { path: "expenseCategory", select: "name code type" },
+  },
+  {
+    path: "vendor",
+    select: "vendorName accountHolderName accountNumber ifscCode email",
+  },
+  { path: "branch", select: "name code" },
+];
+const ENET_ELIGIBLE = [
+  PAYMENT_STATUS.ACCOUNTS_APPROVED,
+  PAYMENT_STATUS.EXCEL_GENERATED,
+];
+const XLSX_MIME =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+// POST /api/payments/:id/enet-excel
+exports.generateEnetExcel = async (req, res) => {
+  try {
+    const payment = await PaymentProcessing.findById(req.params.id).populate(
+      ENET_POPULATE,
+    );
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    if (req.user.role !== ROLES.ACCOUNTS) {
+      return res
+        .status(403)
+        .json({ message: "Only accounts team can generate payment Excel" });
+    }
+    if (!ENET_ELIGIBLE.includes(payment.status)) {
+      return res.status(400).json({
+        message: `Excel can only be generated after Accounts Approval. Current status: ${payment.status}`,
+      });
+    }
+    if (!isPaymentInScope(req.user, payment)) {
+      return res
+        .status(403)
+        .json({ message: "You do not have access to this record" });
+    }
+
+    const errors = validateForEnet(payment);
+    if (errors.length) {
+      return res.status(400).json({
+        message: "This payment cannot be exported in e-Net format",
+        errors,
+      });
+    }
+
+    const previousStatus = payment.status;
+    const isRegeneration = previousStatus === PAYMENT_STATUS.EXCEL_GENERATED;
+    if (!isRegeneration) {
+      payment.status = PAYMENT_STATUS.EXCEL_GENERATED;
+      payment.currentStage = "closed";
+    }
+    payment.approvalHistory.push({
+      stage: isRegeneration
+        ? "e-Net Excel Regeneration"
+        : "e-Net Excel Generation",
+      approvedBy: req.user._id,
+      action: "approved",
+      remarks: "e-Net bank upload sheet generated",
+      actionAt: new Date(),
+    });
+    payment.excelGeneratedAt = new Date();
+    await payment.save();
+
+    const workbook = buildEnetWorkbook([payment]);
+
+    await logAction({
+      userId: req.user._id,
+      action: "GENERATE_ENET_EXCEL",
+      module: "Payment",
+      targetDoc: payment,
+      statusFrom: previousStatus,
+      statusTo: payment.status,
+      req,
+    });
+
+    res.setHeader("Content-Type", XLSX_MIME);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Enet_${payment.paymentId}_${Date.now()}.xlsx"`,
+    );
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("e-Net Excel error:", err);
+    if (!res.headersSent)
+      res.status(500).json({ message: "e-Net Excel generation failed" });
+    else res.destroy(err);
+  }
+};
+
+// POST /api/payments/bulk-enet-excel
+// Body: { paymentIds: ["id1", "id2", ...] }
+exports.bulkGenerateEnetExcel = async (req, res) => {
+  try {
+    const { paymentIds } = req.body;
+    if (!Array.isArray(paymentIds) || paymentIds.length === 0)
+      return res.status(400).json({ message: "No payment IDs provided" });
+
+    const ids = paymentIds.map(toId).filter(Boolean);
+    if (ids.length === 0)
+      return res.status(400).json({ message: "No valid payment IDs provided" });
+
+    const query = { _id: { $in: ids }, status: { $in: ENET_ELIGIBLE } };
+    // Branch scope — no pulling other branches' payments by posting ids.
+    if (BRANCH_SCOPED_ROLES.includes(req.user.role)) {
+      query.branch = { $in: (req.user.branches || []).map((b) => b._id || b) };
+    }
+
+    const payments = await PaymentProcessing.find(query)
+      .populate(ENET_POPULATE)
+      .sort({ paymentId: 1 });
+
+    if (payments.length === 0)
+      return res.status(404).json({ message: "No eligible payments found" });
+
+    // All-or-nothing: a half-valid file uploaded to the bank is worse
+    // than a clear error listing what to fix.
+    const errors = payments.flatMap((p) => validateForEnet(p));
+    if (errors.length) {
+      return res.status(400).json({
+        message: `${errors.length} problem(s) — these payments cannot be exported in e-Net format`,
+        errors,
+      });
+    }
+
+    const workbook = buildEnetWorkbook(payments);
+
+    await PaymentProcessing.updateMany(
+      { _id: { $in: payments.map((p) => p._id) } },
+      {
+        $set: {
+          status: PAYMENT_STATUS.EXCEL_GENERATED,
+          currentStage: "closed",
+          excelGeneratedAt: new Date(),
+        },
+        $push: {
+          approvalHistory: {
+            stage: "e-Net Excel Generation",
+            approvedBy: req.user._id,
+            action: "approved",
+            remarks: "e-Net bank upload sheet generated (bulk)",
+            actionAt: new Date(),
+          },
+        },
+      },
+    );
+
+    await logAction({
+      userId: req.user._id,
+      action: "GENERATE_ENET_EXCEL_BULK",
+      module: "Payment",
+      targetId: null,
+      reason: `${payments.length} payment(s): ${payments
+        .map((p) => p.paymentId)
+        .join(", ")}`,
+      req,
+    });
+
+    res.setHeader("Content-Type", XLSX_MIME);
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="Enet_Payments_${istDateStamp()}.xlsx"`,
+    );
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    console.error("Bulk e-Net Excel error:", err);
+    if (!res.headersSent)
+      res.status(500).json({ message: "e-Net Excel generation failed" });
+    else res.destroy(err);
   }
 };
 

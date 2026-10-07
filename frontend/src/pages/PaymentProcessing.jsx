@@ -60,6 +60,8 @@ const FEDONE_BTN = {
   cursor: "pointer",
 };
 
+const ENET_BTN = { ...FEDONE_BTN, background: "#7c3aed" };
+
 // With responseType:"blob" an error body arrives as a Blob, so
 // err.response.data.message is undefined. Read it back as text.
 const readBlobError = async (err, fallback) => {
@@ -220,7 +222,7 @@ export default function PaymentProcessing() {
   const [utrDate, setUtrDate] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
-  const [bulkFormat, setBulkFormat] = useState("standard"); // "standard" | "fedone"
+  const [bulkFormat, setBulkFormat] = useState("standard"); // "standard" | "fedone" | "enet"
   // Bulk UTR lives in its own modal component — the entry grid and the
   // per-row batch results would otherwise double this file again.
   const [bulkUtrOpen, setBulkUtrOpen] = useState(false);
@@ -455,6 +457,21 @@ export default function PaymentProcessing() {
     }
   };
 
+  // e-Net "Master Vendor Payment" sheet — same flow as FedOne.
+  const handleGenerateEnetExcel = async (paymentId, label) => {
+    try {
+      const res = await api.post(
+        `/payments/${paymentId}/enet-excel`,
+        {},
+        { responseType: "blob" },
+      );
+      saveBlob(res.data, `Enet_${label || paymentId}.xlsx`);
+      fetchData();
+    } catch (err) {
+      setError(await readBlobError(err, "e-Net Excel generation failed"));
+    }
+  };
+
   const isBranch = authUser?.role === "branch_user";
   const isAccounts = authUser?.role === "accounts";
   // Same roles the /documents endpoints allow.
@@ -579,6 +596,25 @@ export default function PaymentProcessing() {
       fetchData();
     } catch (err) {
       setError(await readBlobError(err, "FedOne Excel generation failed"));
+    } finally {
+      setBulkGenerating(false);
+    }
+  };
+
+  const handleBulkEnetExcel = async () => {
+    if (selectedIds.length === 0) return;
+    setBulkGenerating(true);
+    try {
+      const res = await api.post(
+        "/payments/bulk-enet-excel",
+        { paymentIds: selectedIds },
+        { responseType: "blob" },
+      );
+      saveBlob(res.data, `Enet_Payments_${istToday()}.xlsx`);
+      // Selection kept, as for FedOne — "Documents" usually comes next.
+      fetchData();
+    } catch (err) {
+      setError(await readBlobError(err, "e-Net Excel generation failed"));
     } finally {
       setBulkGenerating(false);
     }
@@ -1149,6 +1185,30 @@ export default function PaymentProcessing() {
                         : `🏦 FedOne Excel (${selectedIds.length})`}
                     </button>
 
+                    <button
+                      style={{
+                        ...S.bulkExcelBtn,
+                        background: "#7c3aed",
+                        opacity:
+                          selectedIds.length === 0 || bulkGenerating ? 0.5 : 1,
+                        cursor:
+                          selectedIds.length === 0 || bulkGenerating
+                            ? "not-allowed"
+                            : "pointer",
+                      }}
+                      disabled={selectedIds.length === 0 || bulkGenerating}
+                      title="Master Vendor Payment (e-Net) bank upload format"
+                      onClick={() => {
+                        if (selectedIds.length === 0) return;
+                        setBulkFormat("enet");
+                        setShowBulkConfirm(true);
+                      }}
+                    >
+                      {bulkGenerating
+                        ? "⏳ Generating..."
+                        : `🏧 e-Net Excel (${selectedIds.length})`}
+                    </button>
+
                     {/* Invoice attachments for the ticked payments whose
     Excel exists → PMS_Attachments_<date>.zip (one folder inside). */}
                     {canDownloadDocs && (
@@ -1362,6 +1422,20 @@ export default function PaymentProcessing() {
                                     }
                                   >
                                     🏦 FedOne
+                                  </button>
+                                )}
+                                {canExcel && (
+                                  <button
+                                    style={ENET_BTN}
+                                    title="Master Vendor Payment (e-Net) upload format"
+                                    onClick={() =>
+                                      handleGenerateEnetExcel(
+                                        pay._id,
+                                        pay.paymentId,
+                                      )
+                                    }
+                                  >
+                                    🏧 e-Net
                                   </button>
                                 )}
                                 {canDownloadDocs &&
@@ -1825,7 +1899,9 @@ export default function PaymentProcessing() {
                 <h3 style={S.modalTitle}>
                   {bulkFormat === "fedone"
                     ? "🏦 Confirm FedOne Bank File"
-                    : "📊 Confirm Bulk Excel Generation"}
+                    : bulkFormat === "enet"
+                      ? "🏧 Confirm e-Net Bank File"
+                      : "📊 Confirm Bulk Excel Generation"}
                 </h3>
                 <p style={{ fontSize: 13, color: "#475569", marginBottom: 16 }}>
                   Please review the selected payments before downloading.
@@ -1973,6 +2049,8 @@ export default function PaymentProcessing() {
                       setShowBulkConfirm(false);
                       if (bulkFormat === "fedone")
                         await handleBulkFedOneExcel();
+                      else if (bulkFormat === "enet")
+                        await handleBulkEnetExcel();
                       else await handleBulkExcel();
                     }}
                   >
@@ -1980,7 +2058,9 @@ export default function PaymentProcessing() {
                       ? "⏳ Generating..."
                       : bulkFormat === "fedone"
                         ? "🏦 Confirm & Download FedOne File"
-                        : "📥 Confirm & Download Excel"}
+                        : bulkFormat === "enet"
+                          ? "🏧 Confirm & Download e-Net File"
+                          : "📥 Confirm & Download Excel"}
                   </button>
                 </div>
               </div>

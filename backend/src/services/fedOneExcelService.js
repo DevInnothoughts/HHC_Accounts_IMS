@@ -231,4 +231,10 @@ module.exports = {
   resolveReference,
   buildBankRemark, // also names downloaded attachments (paymentDocumentService)
   FEDONE_COLUMNS,
+  // shared with the e-Net sheet (enetExcelService) so both bank files
+  // clean text, pick the amount and date the value the same way
+  clean,
+  resolveAmount,
+  formatValueDate,
+  MAX,
 };

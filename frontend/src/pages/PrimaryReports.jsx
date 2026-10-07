@@ -17,6 +17,7 @@ import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import SubtypeReport from "./SubtypeReport.jsx";
 import VendorReport from "./VendorReport.jsx";
+import TdsReport from "./TdsReport.jsx";
 import { downloadExcel, filterMeta } from "../utils/exportExcel";
 
 const C = {
@@ -69,10 +70,11 @@ const TABS = [
   ["expense", "Expense categories"],
   ["subtype", "Subtype register"],
   ["vendor", "Vendor analysis"],
+  ["tds", "TDS"],
 ];
 
 // Tabs that carry their own filter bar and load their own data.
-const SELF_CONTAINED = ["subtype", "vendor"];
+const SELF_CONTAINED = ["subtype", "vendor", "tds"];
 
 const BLANK = {
   from: "",
@@ -280,7 +282,12 @@ export default function PrimaryReports() {
 
         {error && <div style={S.error}>{error}</div>}
 
-        {tab === "vendor" ? (
+        {tab === "tds" ? (
+          <TdsReport
+            branches={options.branches}
+            categories={options.categories}
+          />
+        ) : tab === "vendor" ? (
           <VendorReport
             branches={options.branches}
             categories={options.categories}
