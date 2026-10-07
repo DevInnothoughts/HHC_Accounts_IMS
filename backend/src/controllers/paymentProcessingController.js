@@ -16,6 +16,18 @@ const {
   validateForFedOne,
   resolveReference,
 } = require("../services/fedOneExcelService");
+const fs = require("fs");
+const path = require("path");
+const { createZipStream } = require("../services/zipStreamService");
+const {
+  collectPaymentDocuments,
+  loadDocument,
+  buildDocumentBaseName,
+  istDateStamp,
+  missingFilesNote,
+  contentDisposition,
+  MIME_BY_EXT,
+} = require("../services/paymentDocumentService");
 
 // "Payment Remark" cell = invoice remarks + description.
 // Remarks are frequently left blank, so the description keeps the column useful.
@@ -1272,6 +1284,243 @@ exports.bulkGenerateFedOneExcel = async (req, res) => {
   } catch (err) {
     console.error("Bulk FedOne Excel error:", err);
     res.status(500).json({ message: "FedOne Excel generation failed" });
+  }
+};
+
+// ============================================================
+// INVOICE DOCUMENT DOWNLOAD (after the payment Excel exists)
+// ------------------------------------------------------------
+// GET  /api/payments/:id/documents   — one payment's attachments
+// POST /api/payments/bulk-documents  — { paymentIds: [...] } → ZIP
+//
+// File name: "Branch_Name-Remark.ext", where Remark is the
+// FedOne Credit/Debit remark. Bulk ZIP holds one folder,
+// "PMS_Attachments_<YYYY-MM-DD>", with every file inside it.
+// Read-only — no payment or invoice field is touched.
+// ============================================================
+const DOCUMENT_STATUSES = [
+  PAYMENT_STATUS.EXCEL_GENERATED,
+  PAYMENT_STATUS.PROCESSED,
+  PAYMENT_STATUS.PARTIALLY_PAID,
+  PAYMENT_STATUS.FULLY_PAID,
+];
+const MAX_BULK_DOCUMENT_PAYMENTS = 500;
+
+const DOCUMENT_POPULATE = [
+  {
+    path: "invoiceRequest",
+    select: "requestId invoiceNumber expenseCategory attachments",
+    populate: { path: "expenseCategory", select: "name code" },
+  },
+  { path: "branch", select: "name code" },
+];
+
+// Custom headers the browser is allowed to read (axios + CORS).
+const DOC_EXPOSED_HEADERS =
+  "Content-Disposition, X-Documents-Count, X-Documents-Missing, X-Payments-Skipped";
+
+// Sends `files` as a ZIP. Each file is loaded (disk, else its URL) just
+// before it is written, so memory stays flat on big batches. Nothing is
+// sent until the first file has loaded — if none load, returns 0 with
+// the response untouched so the caller can still answer with JSON.
+const streamDocumentsZip = async (res, { folder, files, missing, headers }) => {
+  const notFound = [...missing];
+  let zip = null;
+  let written = 0;
+  const prefix = folder ? `${folder}/` : "";
+
+  for (const f of files) {
+    const data = await loadDocument(f);
+    if (!data) {
+      notFound.push(f);
+      continue;
+    }
+    if (!zip) {
+      Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
+      zip = createZipStream(res);
+      if (folder) await zip.addDirectory(prefix);
+    }
+    await zip.addFile(`${prefix}${f.name}`, data);
+    written++;
+  }
+  if (!zip) return { written: 0, notFound };
+
+  if (notFound.length) {
+    await zip.addFile(
+      `${prefix}_MISSING_FILES.txt`,
+      Buffer.from(missingFilesNote(notFound), "utf8"),
+    );
+  }
+  await zip.finalize();
+  return { written, notFound };
+};
+
+const notFoundMessage = (count, invoiceNumber) =>
+  `${count} attachment(s)${invoiceNumber ? ` on invoice ${invoiceNumber}` : ""} could not be read — not in this server's uploads folder and not reachable at their stored URL.`;
+
+exports.downloadPaymentDocuments = async (req, res) => {
+  try {
+    const payment = await PaymentProcessing.findById(req.params.id).populate(
+      DOCUMENT_POPULATE,
+    );
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    if (!isPaymentInScope(req.user, payment)) {
+      return res
+        .status(403)
+        .json({ message: "You do not have access to this record" });
+    }
+    if (!DOCUMENT_STATUSES.includes(payment.status)) {
+      return res.status(400).json({
+        message: `Documents can be downloaded once the payment Excel is generated. Current status: ${payment.status}`,
+      });
+    }
+
+    const invoiceNumber = payment.invoiceRequest?.invoiceNumber;
+    const { files, missing } = collectPaymentDocuments([payment]);
+    if (files.length === 0 && missing.length === 0)
+      return res
+        .status(404)
+        .json({ message: "No attachments on this invoice" });
+
+    // One invoice = a handful of small files: load them all, then decide
+    // between "the file itself" and a ZIP.
+    const loaded = [];
+    const notFound = [...missing];
+    for (const f of files) {
+      const data = await loadDocument(f);
+      if (data) loaded.push({ ...f, data });
+      else notFound.push(f);
+    }
+    if (loaded.length === 0)
+      return res
+        .status(404)
+        .json({ message: notFoundMessage(notFound.length, invoiceNumber) });
+
+    await logAction({
+      userId: req.user._id,
+      action: "DOWNLOAD_PAYMENT_DOCUMENTS",
+      module: "Payment",
+      targetDoc: payment,
+      reason: `${loaded.length} file(s)${notFound.length ? `, ${notFound.length} missing` : ""}`,
+      req,
+    });
+
+    res.setHeader("Access-Control-Expose-Headers", DOC_EXPOSED_HEADERS);
+    res.setHeader("X-Documents-Count", String(loaded.length));
+    res.setHeader("X-Documents-Missing", String(notFound.length));
+
+    if (loaded.length === 1 && notFound.length === 0) {
+      const [file] = loaded;
+      res.setHeader("Content-Disposition", contentDisposition(file.name));
+      res.setHeader(
+        "Content-Type",
+        MIME_BY_EXT[path.extname(file.name).toLowerCase()] ||
+          "application/octet-stream",
+      );
+      return res.end(file.data);
+    }
+
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader(
+      "Content-Disposition",
+      contentDisposition(`${buildDocumentBaseName(payment)}.zip`),
+    );
+    const zip = createZipStream(res);
+    for (const f of loaded) await zip.addFile(f.name, f.data);
+    if (notFound.length)
+      await zip.addFile(
+        "_MISSING_FILES.txt",
+        Buffer.from(missingFilesNote(notFound), "utf8"),
+      );
+    await zip.finalize();
+  } catch (err) {
+    console.error("Payment documents error:", err);
+    if (!res.headersSent)
+      res.status(500).json({ message: "Document download failed" });
+    else res.destroy(err);
+  }
+};
+
+exports.bulkDownloadPaymentDocuments = async (req, res) => {
+  try {
+    const { paymentIds } = req.body;
+    if (!Array.isArray(paymentIds) || paymentIds.length === 0)
+      return res.status(400).json({ message: "No payment IDs provided" });
+    if (paymentIds.length > MAX_BULK_DOCUMENT_PAYMENTS)
+      return res.status(400).json({
+        message: `Select at most ${MAX_BULK_DOCUMENT_PAYMENTS} payments per download`,
+      });
+
+    const ids = [...new Set(paymentIds.map(toId).filter(Boolean).map(String))];
+    if (ids.length === 0)
+      return res.status(400).json({ message: "No valid payment IDs provided" });
+
+    const query = { _id: { $in: ids }, status: { $in: DOCUMENT_STATUSES } };
+    // Same branch scope as the FedOne export — no pulling other branches'
+    // documents by posting arbitrary ids.
+    if (BRANCH_SCOPED_ROLES.includes(req.user.role)) {
+      query.branch = { $in: (req.user.branches || []).map((b) => b._id || b) };
+    }
+
+    const payments = await PaymentProcessing.find(query)
+      .populate(DOCUMENT_POPULATE)
+      .sort({ paymentId: 1 });
+
+    if (payments.length === 0)
+      return res.status(404).json({
+        message:
+          "None of the selected payments have a generated Excel yet — generate the Excel first, then download documents",
+      });
+
+    const { files, missing } = collectPaymentDocuments(payments);
+    if (files.length === 0)
+      return res.status(404).json({
+        message: missing.length
+          ? notFoundMessage(missing.length)
+          : "The selected payments' invoices have no attachments",
+      });
+
+    const skipped = ids.length - payments.length;
+    const folder = `PMS_Attachments_${istDateStamp()}`;
+
+    const { written, notFound } = await streamDocumentsZip(res, {
+      folder,
+      files,
+      missing,
+      headers: {
+        "Access-Control-Expose-Headers": DOC_EXPOSED_HEADERS,
+        // Counts are known only after loading, so "missing" here is the
+        // pre-check figure; the ZIP's _MISSING_FILES.txt is authoritative.
+        "X-Documents-Count": String(files.length),
+        "X-Documents-Missing": String(missing.length),
+        "X-Payments-Skipped": String(skipped),
+        "Content-Type": "application/zip",
+        "Content-Disposition": contentDisposition(`${folder}.zip`),
+      },
+    });
+
+    if (written === 0)
+      return res
+        .status(404)
+        .json({ message: notFoundMessage(notFound.length) });
+
+    await logAction({
+      userId: req.user._id,
+      action: "DOWNLOAD_PAYMENT_DOCUMENTS_BULK",
+      module: "Payment",
+      targetId: null,
+      targetLabel: folder,
+      reason: `${payments.length} payment(s), ${written} file(s)${notFound.length ? `, ${notFound.length} missing` : ""}: ${payments
+        .map((p) => p.paymentId)
+        .join(", ")}`,
+      req,
+    });
+  } catch (err) {
+    console.error("Bulk payment documents error:", err);
+    if (!res.headersSent)
+      res.status(500).json({ message: "Document download failed" });
+    else res.destroy(err);
   }
 };
 

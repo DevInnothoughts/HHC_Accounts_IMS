@@ -42,6 +42,17 @@ router.post(
   roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
   ctrl.bulkGenerateFedOneExcel,
 );
+// Invoice attachments, once the payment Excel exists. Read-only.
+router.post(
+  "/bulk-documents",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.bulkDownloadPaymentDocuments,
+);
+router.get(
+  "/:id/documents",
+  roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
+  ctrl.downloadPaymentDocuments,
+);
 // Bulk first, for the same ordering reason as above.
 router.patch(
   "/bulk-utr",

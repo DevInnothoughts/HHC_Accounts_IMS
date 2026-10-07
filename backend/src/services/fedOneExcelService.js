@@ -229,5 +229,6 @@ module.exports = {
   buildFedOneWorkbook,
   validateForFedOne,
   resolveReference,
+  buildBankRemark, // also names downloaded attachments (paymentDocumentService)
   FEDONE_COLUMNS,
 };

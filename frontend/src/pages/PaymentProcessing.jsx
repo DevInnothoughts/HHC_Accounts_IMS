@@ -77,6 +77,78 @@ const readBlobError = async (err, fallback) => {
   return data?.message || err.message || fallback;
 };
 
+// ── Invoice document download ─────────────────────────────
+// Available once the payment Excel exists (and after, once paid).
+const DOC_STATUSES = [
+  "Excel Generated",
+  "Payment Processed",
+  "Partially Paid",
+  "Fully Paid",
+];
+
+// Today in IST as YYYY-MM-DD — matches the server's folder name.
+const istToday = () =>
+  new Date(Date.now() + 330 * 60 * 1000).toISOString().slice(0, 10);
+
+// Server sends "Branch_Name-Remark.ext"; prefer its UTF-8 form.
+const fileNameFromHeader = (headers, fallback) => {
+  const cd = headers?.["content-disposition"] || "";
+  const star = cd.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1]);
+    } catch {
+      /* fall through */
+    }
+  }
+  const plain = cd.match(/filename="([^"]+)"/i);
+  return plain ? plain[1] : fallback;
+};
+
+const saveBlob = (data, fileName, type) => {
+  const url = window.URL.createObjectURL(new Blob([data], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.setAttribute("download", fileName);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
+
+const DOC_ICON_BTN = {
+  width: 30,
+  height: 28,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 0,
+  background: "#f0f9ff",
+  border: "1px solid #bae6fd",
+  borderRadius: 6,
+  color: "#0369a1",
+  cursor: "pointer",
+};
+
+// Plain download glyph — no icon library in the bundle.
+const DownloadIcon = () => (
+  <svg
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2.2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M12 3v12" />
+    <path d="m7 10 5 5 5-5" />
+    <path d="M5 21h14" />
+  </svg>
+);
+
 export default function PaymentProcessing() {
   const { user } = useNavigate();
   const navigate = useNavigate();
@@ -152,6 +224,8 @@ export default function PaymentProcessing() {
   // Bulk UTR lives in its own modal component — the entry grid and the
   // per-row batch results would otherwise double this file again.
   const [bulkUtrOpen, setBulkUtrOpen] = useState(false);
+  const [docDownloadingId, setDocDownloadingId] = useState(null); // row in flight
+  const [bulkDocsDownloading, setBulkDocsDownloading] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
@@ -383,6 +457,8 @@ export default function PaymentProcessing() {
 
   const isBranch = authUser?.role === "branch_user";
   const isAccounts = authUser?.role === "accounts";
+  // Same roles the /documents endpoints allow.
+  const canDownloadDocs = isAccounts || authUser?.role === "super_admin";
 
   const eligiblePayments = payments.filter((p) =>
     ["Accounts Approved", "Excel Generated"].includes(p.status),
@@ -430,6 +506,13 @@ export default function PaymentProcessing() {
   const utrEligibleIds = payments
     .filter(
       (p) => selectedIds.includes(p._id) && p.status === "Excel Generated",
+    )
+    .map((p) => p._id);
+
+  // Ticked payments whose Excel exists — only these have documents to pull.
+  const docEligibleIds = payments
+    .filter(
+      (p) => selectedIds.includes(p._id) && DOC_STATUSES.includes(p.status),
     )
     .map((p) => p._id);
 
@@ -491,12 +574,71 @@ export default function PaymentProcessing() {
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      setSelectedIds([]);
+      // Selection is kept on purpose: the next step is usually
+      // "📎 Documents" for the same payments.
       fetchData();
     } catch (err) {
       setError(await readBlobError(err, "FedOne Excel generation failed"));
     } finally {
       setBulkGenerating(false);
+    }
+  };
+
+  // Tells the user what was left out of a download (files missing on the
+  // server, or selected payments whose Excel isn't generated yet).
+  const reportDocumentGaps = (headers) => {
+    const missing = Number(headers?.["x-documents-missing"] || 0);
+    const skipped = Number(headers?.["x-payments-skipped"] || 0);
+    const notes = [];
+    if (missing)
+      notes.push(
+        `${missing} attachment file(s) were not found on the server — see _MISSING_FILES.txt in the download`,
+      );
+    if (skipped)
+      notes.push(
+        `${skipped} selected payment(s) skipped because their Excel is not generated yet`,
+      );
+    if (notes.length) setError(`⚠ Documents downloaded. ${notes.join("; ")}.`);
+  };
+
+  const handleDownloadDocuments = async (pay) => {
+    setDocDownloadingId(pay._id);
+    try {
+      const res = await api.get(`/payments/${pay._id}/documents`, {
+        responseType: "blob",
+      });
+      saveBlob(
+        res.data,
+        fileNameFromHeader(res.headers, `${pay.paymentId}_documents`),
+        res.headers?.["content-type"],
+      );
+      reportDocumentGaps(res.headers);
+    } catch (err) {
+      setError(await readBlobError(err, "Document download failed"));
+    } finally {
+      setDocDownloadingId(null);
+    }
+  };
+
+  const handleBulkDocuments = async () => {
+    if (docEligibleIds.length === 0) return;
+    setBulkDocsDownloading(true);
+    try {
+      const res = await api.post(
+        "/payments/bulk-documents",
+        { paymentIds: docEligibleIds },
+        { responseType: "blob" },
+      );
+      saveBlob(
+        res.data,
+        fileNameFromHeader(res.headers, `PMS_Attachments_${istToday()}.zip`),
+        "application/zip",
+      );
+      reportDocumentGaps(res.headers);
+    } catch (err) {
+      setError(await readBlobError(err, "Document download failed"));
+    } finally {
+      setBulkDocsDownloading(false);
     }
   };
 
@@ -1006,6 +1148,39 @@ export default function PaymentProcessing() {
                         ? "⏳ Generating..."
                         : `🏦 FedOne Excel (${selectedIds.length})`}
                     </button>
+
+                    {/* Invoice attachments for the ticked payments whose
+    Excel exists → PMS_Attachments_<date>.zip (one folder inside). */}
+                    {canDownloadDocs && (
+                      <button
+                        style={{
+                          ...S.bulkExcelBtn,
+                          background: "#0369a1",
+                          opacity:
+                            docEligibleIds.length === 0 || bulkDocsDownloading
+                              ? 0.5
+                              : 1,
+                          cursor:
+                            docEligibleIds.length === 0 || bulkDocsDownloading
+                              ? "not-allowed"
+                              : "pointer",
+                        }}
+                        disabled={
+                          docEligibleIds.length === 0 || bulkDocsDownloading
+                        }
+                        onClick={handleBulkDocuments}
+                        title={
+                          selectedIds.length > 0 && docEligibleIds.length === 0
+                            ? "Generate the Excel for these payments first — documents download once it exists"
+                            : "Download all invoice attachments for the selected payments in one folder"
+                        }
+                      >
+                        <DownloadIcon />
+                        {bulkDocsDownloading
+                          ? "Preparing…"
+                          : `Documents (${docEligibleIds.length})`}
+                      </button>
+                    )}
                     {/* Bulk UTR opens whether or not anything is ticked:
     with a selection it pre-fills those rows, without
     one it lists everything still awaiting a UTR. */}
@@ -1189,6 +1364,30 @@ export default function PaymentProcessing() {
                                     🏦 FedOne
                                   </button>
                                 )}
+                                {canDownloadDocs &&
+                                  DOC_STATUSES.includes(pay.status) && (
+                                    <button
+                                      style={{
+                                        ...DOC_ICON_BTN,
+                                        opacity:
+                                          docDownloadingId === pay._id
+                                            ? 0.5
+                                            : 1,
+                                      }}
+                                      disabled={docDownloadingId === pay._id}
+                                      title="Download invoice documents"
+                                      aria-label={`Download documents for ${pay.paymentId}`}
+                                      onClick={() =>
+                                        handleDownloadDocuments(pay)
+                                      }
+                                    >
+                                      {docDownloadingId === pay._id ? (
+                                        "…"
+                                      ) : (
+                                        <DownloadIcon />
+                                      )}
+                                    </button>
+                                  )}
                                 {pay.status === "Excel Generated" &&
                                   isAccounts && (
                                     <button
@@ -1288,12 +1487,33 @@ export default function PaymentProcessing() {
                         : "—"}
                     </td>
                     <td style={S.td}>
-                      <button
-                        style={S.viewBtn}
-                        onClick={() => navigate(`/payments/${pay._id}`)}
-                      >
-                        View
-                      </button>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          style={S.viewBtn}
+                          onClick={() => navigate(`/payments/${pay._id}`)}
+                        >
+                          View
+                        </button>
+                        {canDownloadDocs &&
+                          DOC_STATUSES.includes(pay.status) && (
+                            <button
+                              style={{
+                                ...DOC_ICON_BTN,
+                                opacity: docDownloadingId === pay._id ? 0.5 : 1,
+                              }}
+                              disabled={docDownloadingId === pay._id}
+                              title="Download invoice documents"
+                              aria-label={`Download documents for ${pay.paymentId}`}
+                              onClick={() => handleDownloadDocuments(pay)}
+                            >
+                              {docDownloadingId === pay._id ? (
+                                "…"
+                              ) : (
+                                <DownloadIcon />
+                              )}
+                            </button>
+                          )}
+                      </div>
                     </td>
                   </tr>
                 ))}
