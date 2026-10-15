@@ -12,26 +12,8 @@ import {
   PaymentCycleModal,
 } from "../components/PaymentCycleWidgets.jsx";
 
-const PRIORITY_OPTIONS = ["Normal", "Urgent", "Critical"];
 const EXPENSE_TYPES = ["Revenue", "Capital"];
 
-const PRIORITY_INFO = {
-  Normal: {
-    color: "#2563eb",
-    bg: "#eff6ff",
-    desc: "Standard processing timeline",
-  },
-  Urgent: {
-    color: "#d97706",
-    bg: "#fffbeb",
-    desc: "Needs processing within 24–48 hrs",
-  },
-  Critical: {
-    color: "#dc2626",
-    bg: "#fef2f2",
-    desc: "Requires immediate attention",
-  },
-};
 
 const STEPS = [
   "Basic Info",
@@ -46,6 +28,9 @@ export default function EditPaymentRequest() {
   const { user } = useAuth();
 
   const [form, setForm] = useState(null);
+  // Status and creator of the record being edited — decides whether
+  // "Save & Submit" is offered (mirrors the backend submit rule).
+  const [record, setRecord] = useState(null);
   const [step, setStep] = useState(0);
   const [branches, setBranches] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -71,6 +56,10 @@ export default function EditPaymentRequest() {
         ]);
 
         const r = reqRes.data;
+        setRecord({
+          status: r.status,
+          createdBy: String(r.createdBy?._id || r.createdBy || ""),
+        });
         setBranches(
           Array.isArray(branchRes.data)
             ? branchRes.data
@@ -118,7 +107,6 @@ export default function EditPaymentRequest() {
           invoiceDate: r.invoiceDate ? r.invoiceDate.split("T")[0] : "",
           dueDate: r.dueDate ? r.dueDate.split("T")[0] : "",
           description: r.description || "",
-          priority: r.priority || "Normal",
           remarks: r.remarks || "",
         });
       } catch (err) {
@@ -226,7 +214,6 @@ export default function EditPaymentRequest() {
       if (!form.expenseType) e.expenseType = "Expense type is required";
       if (!form.expenseCategory)
         e.expenseCategory = "Expense category is required";
-      if (!form.priority) e.priority = "Priority is required";
     }
     if (s === 1) {
       if (!form.itemsValid) {
@@ -416,7 +403,7 @@ export default function EditPaymentRequest() {
                     value={form.branch}
                     onChange={set("branch")}
                     disabled={
-                      user?.role === "branch_user" &&
+                      ["branch_user", "accounts"].includes(user?.role) &&
                       user.branches?.length === 1
                     }
                   >
@@ -531,46 +518,6 @@ export default function EditPaymentRequest() {
                   </select>
                 </Field>
 
-                <Field label="Priority *" error={errors.priority} fullWidth>
-                  <div style={S.radioGroup}>
-                    {PRIORITY_OPTIONS.map((p) => {
-                      const pi = PRIORITY_INFO[p];
-                      return (
-                        <label
-                          key={p}
-                          style={{
-                            ...S.priorityOption,
-                            ...(form.priority === p
-                              ? {
-                                  ...S.prioritySelected,
-                                  background: pi.bg,
-                                  borderColor: pi.color,
-                                  color: pi.color,
-                                }
-                              : {}),
-                          }}
-                        >
-                          <input
-                            type="radio"
-                            name="priority"
-                            value={p}
-                            checked={form.priority === p}
-                            onChange={set("priority")}
-                            style={{ display: "none" }}
-                          />
-                          <div style={{ fontWeight: 700, fontSize: 14 }}>
-                            {p}
-                          </div>
-                          <div
-                            style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}
-                          >
-                            {pi.desc}
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </Field>
               </div>
             </div>
           )}
@@ -764,16 +711,6 @@ export default function EditPaymentRequest() {
                     label="Expense Category"
                     value={selectedCategory?.name}
                   />
-                  <ReviewRow label="Priority">
-                    <span
-                      style={{
-                        color: PRIORITY_INFO[form.priority]?.color,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {form.priority}
-                    </span>
-                  </ReviewRow>
                 </ReviewSection>
 
                 <ReviewSection title="Financial Summary">
@@ -972,6 +909,18 @@ export default function EditPaymentRequest() {
                     {saving ? "Saving..." : "💾 Save as Draft"}
                   </button>
                   {(() => {
+                    // Branch users: own Draft/Rejected. Accounts: Rejected, or
+                    // a Draft they created. Otherwise this page only saves.
+                    const me = String(user?._id || user?.id || "");
+                    const isOwner = !!me && record?.createdBy === me;
+                    const canSubmit =
+                      (user?.role === "branch_user" &&
+                        isOwner &&
+                        ["Draft", "Rejected"].includes(record?.status)) ||
+                      (user?.role === "accounts" &&
+                        (record?.status === "Rejected" ||
+                          (record?.status === "Draft" && isOwner)));
+                    if (!canSubmit) return null;
                     const missingDocs = ["invoice", "quotation"].filter(
                       (t) => !attachments.some((a) => a.type === t),
                     );

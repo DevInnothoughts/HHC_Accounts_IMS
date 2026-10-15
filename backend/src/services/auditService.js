@@ -48,6 +48,8 @@ const MODULE_TO_MODEL = {
   User: "User",
   ExpenseCategory: "ExpenseCategory",
   SLA: "SLAConfig",
+  FixedPayment: "FixedPayment",
+  CreditNote: "CreditNote",
 };
 
 // Pull a human reference out of whatever document was acted on.

@@ -1,11 +1,16 @@
 import { useState, useEffect } from "react";
 import React from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import FileUpload from "../components/FileUpload.jsx";
+import CreditNotesPanel from "../components/CreditNotesPanel.jsx";
 import { INVOICE_WORKFLOW, INVOICE_STAGES } from "../config/constants";
+import {
+  usePaymentCycle,
+  ApprovalCycleNotice,
+} from "../components/PaymentCycleWidgets.jsx";
 
 const STATUS_STYLES = {
   Draft: { bg: "#f1f5f9", color: "#475569", icon: "📝" },
@@ -16,14 +21,12 @@ const STATUS_STYLES = {
   Rejected: { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
-const PRIORITY_COLORS = {
-  Normal: "#2563eb",
-  Urgent: "#d97706",
-  Critical: "#dc2626",
-};
 
 export default function InvoiceDetail() {
   const { id } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Bumped to open the credit-note form (header button / ?creditNote=new).
+  const [creditNoteSignal, setCreditNoteSignal] = useState(0);
   const navigate = useNavigate();
   const { user } = useAuth();
   const [invoice, setInvoice] = useState(null);
@@ -35,6 +38,12 @@ export default function InvoiceDetail() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [tdsInput, setTdsInput] = useState("");
+  // Payment cycle shown in the approval popup (refreshed on every open).
+  const {
+    cycle,
+    loading: cycleLoading,
+    reload: reloadCycle,
+  } = usePaymentCycle();
 
   const fetchInvoice = async () => {
     try {
@@ -50,6 +59,16 @@ export default function InvoiceDetail() {
   useEffect(() => {
     fetchInvoice();
   }, [id]);
+
+  // Arrived from Credit Notes → "+ New Credit Note": open the form.
+  useEffect(() => {
+    if (invoice && searchParams.get("creditNote") === "new") {
+      setCreditNoteSignal((n) => n + 1);
+      searchParams.delete("creditNote");
+      setSearchParams(searchParams, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice]);
 
   // ── Workflow visibility ────────────────────────────────
   const userId = user?._id || user?.id;
@@ -82,7 +101,9 @@ export default function InvoiceDetail() {
 
   const canSubmit =
     (isBranchUser && isOwner && invoice?.status === "Draft") ||
-    (isAccounts && invoice?.status === "Rejected");
+    (isAccounts &&
+      (invoice?.status === "Rejected" ||
+        (invoice?.status === "Draft" && isOwner)));
 
   const REQUIRED_DOC_TYPES = ["invoice", "quotation"];
   const missingRequiredDocs = REQUIRED_DOC_TYPES.filter(
@@ -187,15 +208,6 @@ export default function InvoiceDetail() {
               >
                 {ss.icon} {invoice.status}
               </span>
-              <span
-                style={{
-                  ...S.priorityBadge,
-                  color: PRIORITY_COLORS[invoice.priority],
-                  background: PRIORITY_COLORS[invoice.priority] + "18",
-                }}
-              >
-                {invoice.priority}
-              </span>
             </div>
             <div style={S.meta}>
               Created by <strong>{invoice.createdBy?.name}</strong> ·{" "}
@@ -262,6 +274,15 @@ export default function InvoiceDetail() {
                 💳 Go to Payment
               </button>
             )}
+            {invoice.status === "Cluster Head Approved" &&
+              ["branch_user", "accounts", "super_admin"].includes(user?.role) && (
+                <button
+                  style={{ ...S.paymentBtn, background: "#0f766e" }}
+                  onClick={() => setCreditNoteSignal((n) => n + 1)}
+                >
+                  🧾 Add Credit Note
+                </button>
+              )}
             {canReject && (
               <button
                 style={S.rejectBtn}
@@ -273,7 +294,10 @@ export default function InvoiceDetail() {
             {canApprove && (
               <button
                 style={S.approveBtn}
-                onClick={() => setActionModal("approve")}
+                onClick={() => {
+                  reloadCycle();
+                  setActionModal("approve");
+                }}
               >
                 ✓ Approve
               </button>
@@ -459,19 +483,6 @@ export default function InvoiceDetail() {
                 <InfoRow
                   label="Expense Category"
                   value={invoice.expenseCategory?.name}
-                />
-                <InfoRow
-                  label="Priority"
-                  value={
-                    <span
-                      style={{
-                        color: PRIORITY_COLORS[invoice.priority],
-                        fontWeight: 700,
-                      }}
-                    >
-                      {invoice.priority}
-                    </span>
-                  }
                 />
                 <InfoRow
                   label="Invoice No."
@@ -868,6 +879,13 @@ export default function InvoiceDetail() {
                 Approving <strong>{invoice.requestId}</strong>
               </p>
 
+              {/* Payment cycle — shown on every approval, every role */}
+              <ApprovalCycleNotice
+                cycle={cycle}
+                loading={cycleLoading}
+                isFinalApproval={invoice.status === "Accounts Approved"}
+              />
+
               {/* ✅ TDS input — only shown to accounts team */}
               {user?.role === "accounts" && (
                 <div style={{ marginBottom: 16 }}>
@@ -1016,6 +1034,47 @@ export default function InvoiceDetail() {
           </div>
         )}
 
+        {/* Credit notes — listed for everyone; Accounts / Super Admin can add */}
+        {invoice && (
+          <CreditNotesPanel
+            invoice={invoice}
+            user={user}
+            onChanged={fetchInvoice}
+            openSignal={creditNoteSignal}
+          />
+        )}
+
+        {invoice?.source === "fixed_payment" && (
+          <div
+            style={{
+              background: "#f5f3ff",
+              border: "1px solid #ddd6fe",
+              borderRadius: 10,
+              padding: "12px 14px",
+              marginBottom: 16,
+              fontSize: 13,
+              color: "#4c1d95",
+              lineHeight: 1.55,
+            }}
+          >
+            <strong>🔁 Fixed monthly payment</strong>
+            {invoice.fixedPeriod ? ` · ${invoice.fixedPeriod}` : ""} — created
+            automatically and auto-approved under a fixed payment approved once
+            by Super Admin. No branch upload or invoice approvals were needed.
+            {invoice.fixedAmountAdjustments?.length > 0 && (
+              <div style={{ marginTop: 6, fontSize: 12, color: "#6d28d9" }}>
+                Amount adjusted for this month:{" "}
+                {invoice.fixedAmountAdjustments
+                  .map(
+                    (a) =>
+                      `₹${Number(a.from).toLocaleString("en-IN")} → ₹${Number(a.to).toLocaleString("en-IN")}${a.reason ? ` (${a.reason})` : ""}`,
+                  )
+                  .join("; ")}
+              </div>
+            )}
+          </div>
+        )}
+
         {invoice?.paymentCycle?.assigned && (
           <div
             style={{
@@ -1038,20 +1097,14 @@ export default function InvoiceDetail() {
               }}
             >
               {invoice.paymentCycle.assigned.cycleLabel} ·{" "}
-              {new Date(
-                invoice.paymentCycle.assigned.paymentDate,
-              ).toLocaleDateString("en-GB", {
-                day: "2-digit",
-                month: "short",
-                year: "numeric",
-              })}
+              {formatCycleDates(invoice.paymentCycle.assigned)}
             </div>
             <div style={{ fontSize: 11, color: "#64748b", marginTop: 5 }}>
               {invoice.paymentCycle.assigned.derived
                 ? "Derived from the approval history of this invoice."
                 : "Fixed on final approval."}{" "}
-              If this date falls on a Sunday or bank holiday, payment moves to
-              the next working day.
+              If a payment day falls on a Sunday or bank holiday, payment moves
+              to the next working day.
             </div>
           </div>
         )}
@@ -1059,6 +1112,17 @@ export default function InvoiceDetail() {
     </div>
   );
 }
+
+// "10–15 Oct 2026" for windowed cycles; "07 Oct 2026" for the old
+// single-day 7th/21st cycles stored before Oct 2026.
+const formatCycleDates = (assigned) => {
+  const opts = { day: "2-digit", month: "short", year: "numeric" };
+  const start = new Date(assigned.paymentDate);
+  if (!assigned.paymentEndDate) return start.toLocaleDateString("en-GB", opts);
+  const end = new Date(assigned.paymentEndDate);
+  const dd = (d) => d.toLocaleDateString("en-GB", { day: "2-digit" });
+  return `${dd(start)}–${end.toLocaleDateString("en-GB", opts)}`;
+};
 
 // ── Sub-components ─────────────────────────────────────────
 const InfoCard = ({ title, children }) => (

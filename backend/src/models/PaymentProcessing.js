@@ -85,6 +85,9 @@ const paymentProcessingSchema = new mongoose.Schema(
         "Partially Paid", // partial payment done, balance remaining
         "Fully Paid", // all payments cleared
         "Payment Rejected",
+        // Oct 2026: nothing was paid and an approved credit note reduced
+        // the payable to zero (all goods returned). Nothing left to pay.
+        "Closed by Credit Note",
       ],
       default: "Payment Pending",
     },

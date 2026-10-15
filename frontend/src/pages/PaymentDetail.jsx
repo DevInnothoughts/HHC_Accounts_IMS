@@ -34,6 +34,46 @@ export default function PaymentDetail() {
     new Date().toISOString().slice(0, 10),
   );
 
+  // ── UTR correction (super admin only) ──────────────────
+  const [utrFix, setUtrFix] = useState(null); // { installmentRef, label, current }
+  const [utrFixValue, setUtrFixValue] = useState("");
+  const [utrFixReason, setUtrFixReason] = useState("");
+  const [utrFixError, setUtrFixError] = useState("");
+  const [utrFixSaving, setUtrFixSaving] = useState(false);
+
+  const openUtrFix = (target) => {
+    setUtrFix(target);
+    setUtrFixValue(target.current || "");
+    setUtrFixReason("");
+    setUtrFixError("");
+  };
+
+  const saveUtrFix = async (allowDuplicate = false) => {
+    if (!utrFix) return;
+    setUtrFixSaving(true);
+    setUtrFixError("");
+    try {
+      await api.patch(`/payments/${id}/utr/correct`, {
+        installmentRef: utrFix.installmentRef || undefined,
+        utrNumber: utrFixValue.trim(),
+        reason: utrFixReason.trim(),
+        allowDuplicate,
+      });
+      setUtrFix(null);
+      fetchPayment();
+    } catch (err) {
+      const data = err.response?.data;
+      if (err.response?.status === 409 && data?.code === "UTR_DUPLICATE") {
+        setUtrFixSaving(false);
+        if (window.confirm(data.message)) return saveUtrFix(true);
+        return;
+      }
+      setUtrFixError(data?.message || "Could not update the UTR");
+    } finally {
+      setUtrFixSaving(false);
+    }
+  };
+
   const handleRecordUTR = async () => {
     if (!utrInput.trim()) return;
     setUtrSubmitting(true);
@@ -68,6 +108,12 @@ export default function PaymentDetail() {
   }, [id]);
 
   const isAccounts = user?.role === "accounts";
+  const isSuperAdmin = user?.role === "super_admin";
+
+  // The installment the top-level UTR belongs to (latest one with a UTR).
+  const latestUtrInstallment = [...(payment?.installments || [])]
+    .reverse()
+    .find((inst) => inst?.utrNumber);
   const canApprove = isAccounts && payment?.status === "Payment Raised";
   const canReject = canApprove;
   const canExcel =
@@ -380,7 +426,32 @@ export default function PaymentDetail() {
             />
             <InfoRow label="Remarks" value={payment.paymentRemarks || "—"} />
             {payment.utrNumber && (
-              <InfoRow label="UTR Number" value={payment.utrNumber} mono />
+              <InfoRow
+                label="UTR Number"
+                mono
+                value={
+                  <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                    {payment.utrNumber}
+                    {isSuperAdmin && (
+                      <button
+                        type="button"
+                        style={S.utrEditBtn}
+                        title="Correct this UTR"
+                        onClick={() =>
+                          openUtrFix({
+                            installmentRef: latestUtrInstallment?.paymentId,
+                            label:
+                              latestUtrInstallment?.paymentId || payment.paymentId,
+                            current: latestUtrInstallment?.utrNumber || payment.utrNumber,
+                          })
+                        }
+                      >
+                        ✏️ Edit
+                      </button>
+                    )}
+                  </span>
+                }
+              />
             )}
             {payment.paymentDate && (
               <InfoRow
@@ -648,6 +719,22 @@ export default function PaymentDetail() {
                         >
                           {inst.utrNumber || "—"}
                         </span>
+                        {isSuperAdmin && inst.utrNumber && (
+                          <button
+                            type="button"
+                            style={{ ...S.utrEditBtn, marginLeft: 6 }}
+                            title="Correct this UTR"
+                            onClick={() =>
+                              openUtrFix({
+                                installmentRef: inst.paymentId,
+                                label: inst.paymentId || `Installment ${i + 1}`,
+                                current: inst.utrNumber,
+                              })
+                            }
+                          >
+                            ✏️ Edit
+                          </button>
+                        )}
                       </span>
                       <span>
                         Paid on:{" "}
@@ -754,6 +841,72 @@ export default function PaymentDetail() {
                 >
                   {submitting ? "Rejecting..." : "✗ Confirm Reject"}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* UTR Correction Modal (super admin) */}
+        {utrFix && (
+          <div style={S.overlay}>
+            <div style={S.modal}>
+              <h3 style={S.modalTitle}>✏️ Correct UTR</h3>
+              <p style={{ fontSize: 13, color: "#475569", margin: "0 0 14px" }}>
+                {utrFix.label} · current UTR{" "}
+                <span style={{ fontFamily: "monospace", fontWeight: 700 }}>
+                  {utrFix.current}
+                </span>
+              </p>
+              <label style={S.utrFixLabel}>Correct UTR / Reference Number *</label>
+              <input
+                type="text"
+                style={{ ...S.utrFixInput, fontFamily: "monospace" }}
+                value={utrFixValue}
+                onChange={(e) => setUtrFixValue(e.target.value.toUpperCase())}
+                autoFocus
+              />
+              <label style={S.utrFixLabel}>Reason for correction *</label>
+              <textarea
+                style={{ ...S.utrFixInput, minHeight: 70, resize: "vertical" }}
+                placeholder="e.g. Digits transposed while entering from bank statement"
+                value={utrFixReason}
+                onChange={(e) => setUtrFixReason(e.target.value)}
+              />
+              <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 10 }}>
+                Only the UTR text changes. Amounts and payment status stay as
+                they are. The old and new UTR are kept in the payment history
+                and audit log.
+              </div>
+              {utrFixError && (
+                <div style={S.utrFixError}>{utrFixError}</div>
+              )}
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  style={S.cancelBtn}
+                  disabled={utrFixSaving}
+                  onClick={() => setUtrFix(null)}
+                >
+                  Cancel
+                </button>
+                {(() => {
+                  const ready =
+                    utrFixValue.trim() &&
+                    utrFixValue.trim() !== utrFix.current &&
+                    utrFixReason.trim().length >= 5;
+                  return (
+                    <button
+                      style={{
+                        ...S.utrFixSave,
+                        background: ready ? "#166534" : "#94a3b8",
+                        cursor: ready ? "pointer" : "not-allowed",
+                        opacity: utrFixSaving ? 0.7 : 1,
+                      }}
+                      disabled={!ready || utrFixSaving}
+                      onClick={() => saveUtrFix(false)}
+                    >
+                      {utrFixSaving ? "Saving..." : "Save UTR"}
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -920,6 +1073,51 @@ const IC = {
 
 const C = { primary: "#1a3c6e", accent: "#2563eb", border: "#e2e8f0" };
 const S = {
+  utrEditBtn: {
+    background: "#fff",
+    border: "1px solid #cbd5e1",
+    borderRadius: 6,
+    padding: "1px 8px",
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#475569",
+    cursor: "pointer",
+    fontFamily: "inherit",
+  },
+  utrFixLabel: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#475569",
+    display: "block",
+    marginBottom: 6,
+  },
+  utrFixInput: {
+    width: "100%",
+    padding: "10px 12px",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    fontSize: 14,
+    outline: "none",
+    boxSizing: "border-box",
+    marginBottom: 12,
+  },
+  utrFixError: {
+    fontSize: 12.5,
+    color: "#b91c1c",
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 8,
+    padding: "8px 10px",
+    marginBottom: 10,
+  },
+  utrFixSave: {
+    color: "#fff",
+    border: "none",
+    padding: "10px 20px",
+    borderRadius: 8,
+    fontWeight: 600,
+    fontSize: 13,
+  },
   layout: { display: "flex", minHeight: "100vh", background: "#f8fafc" },
   main: { flex: 1, padding: "24px 28px", overflowY: "auto" },
   loading: { padding: 60, textAlign: "center", color: "#94a3b8" },

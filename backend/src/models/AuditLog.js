@@ -51,6 +51,8 @@ const auditLogSchema = new mongoose.Schema(
         "User",
         "ExpenseCategory",
         "SLAConfig",
+        "FixedPayment",
+        "CreditNote",
       ],
     },
     // Human reference captured at write time — "INV-000444", "PAY-0231".

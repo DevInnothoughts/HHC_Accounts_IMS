@@ -73,13 +73,26 @@ router.get(
 
 router.get("/", ctrl.getInvoices);
 router.get("/:id", ctrl.getInvoiceById);
-router.post("/", roleGuard(ROLES.BRANCH_USER), ctrl.createInvoice);
+// Accounts may also raise invoices (Oct 2026). They follow the same
+// Partner → Accounts → Cluster Head route as a branch invoice.
+router.post(
+  "/",
+  roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS),
+  ctrl.createInvoice,
+);
 router.put(
   "/:id",
   roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
   ctrl.updateInvoice,
 );
-router.patch("/:id/submit", roleGuard(ROLES.BRANCH_USER), ctrl.submitInvoice);
+// ACCOUNTS added: the controller has always allowed Accounts to resubmit
+// rejected invoices, but this guard silently 403'd them. Accounts can now
+// also submit drafts they created themselves.
+router.patch(
+  "/:id/submit",
+  roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS),
+  ctrl.submitInvoice,
+);
 router.patch(
   "/:id/approve",
   roleGuard(ROLES.ACCOUNTS, ROLES.BRANCH_PARTNER, ROLES.CLUSTER_HEAD),

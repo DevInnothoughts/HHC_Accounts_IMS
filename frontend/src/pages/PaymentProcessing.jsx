@@ -47,6 +47,7 @@ const STATUS_STYLES = {
   "Partially Paid": { bg: "#fffbeb", color: "#d97706", icon: "⚡" },
   "Fully Paid": { bg: "#f0fdf4", color: "#166534", icon: "🎉" },
   "Payment Rejected": { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
+  "Closed by Credit Note": { bg: "#f1f5f9", color: "#475569", icon: "🧾" },
 };
 
 const FEDONE_BTN = {
@@ -172,6 +173,12 @@ export default function PaymentProcessing() {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [raiseModal, setRaiseModal] = useState(null);
+  // Fixed monthly payment: adjust this month's amount before raising.
+  const [adjustInv, setAdjustInv] = useState(null);
+  const [adjustAmount, setAdjustAmount] = useState("");
+  const [adjustReason, setAdjustReason] = useState("");
+  const [adjustError, setAdjustError] = useState("");
+  const [adjustSaving, setAdjustSaving] = useState(false);
   const [raiseForm, setRaiseForm] = useState({
     paymentRemarks: "",
     scheduledDate: "",
@@ -219,6 +226,10 @@ export default function PaymentProcessing() {
   const [statusCounts, setStatusCounts] = useState(null);
   const [unlinked, setUnlinked] = useState(0);
   const [noPaymentRecord, setNoPaymentRecord] = useState(0);
+  // Payment-cycle processing window (8–10 / 18–21) and how many
+  // raiseable invoices it is holding back.
+  const [processingWindow, setProcessingWindow] = useState(null);
+  const [lockedCount, setLockedCount] = useState(0);
   const [utrDate, setUtrDate] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
@@ -339,6 +350,8 @@ export default function PaymentProcessing() {
       setStatusCounts(invRes.data.statusCounts || null);
       setUnlinked(invRes.data.unlinked || 0);
       setNoPaymentRecord(invRes.data.approvedWithoutPaymentRecord || 0);
+      setProcessingWindow(invRes.data.processingWindow || null);
+      setLockedCount(invRes.data.lockedCount || 0);
 
       // Only the active tab's rows are rendered. Processed statuses are now
       // excluded server-side via `excludeProcessed`, so no client filtering.
@@ -372,6 +385,24 @@ export default function PaymentProcessing() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleAdjustAmount = async () => {
+    if (!adjustInv) return;
+    setAdjustSaving(true);
+    setAdjustError("");
+    try {
+      await api.patch(`/fixed-payments/invoices/${adjustInv._id}/amount`, {
+        amount: parseFloat(adjustAmount),
+        reason: adjustReason.trim(),
+      });
+      setAdjustInv(null);
+      fetchData();
+    } catch (err) {
+      setAdjustError(err.response?.data?.message || "Could not update the amount");
+    } finally {
+      setAdjustSaving(false);
+    }
+  };
 
   const handleRaisePayment = async () => {
     if (!raiseModal) return;
@@ -914,6 +945,24 @@ export default function PaymentProcessing() {
                   for payment. The Accounts team can raise and process the
                   payment.
                 </div>
+                {processingWindow?.active && (
+                  <div style={S.cycleBanner}>
+                    <div style={{ fontWeight: 700 }}>
+                      🔒 {processingWindow.cycleLabel} processing window ·{" "}
+                      {processingWindow.processingWindowLabel}
+                    </div>
+                    <div style={{ marginTop: 3 }}>
+                      Only invoices approved by the Cluster Head by{" "}
+                      {processingWindow.cutoffDateTimeLabel} can be processed
+                      now (bank payment {processingWindow.paymentWindowLabel}).
+                      Invoices approved after the cut-off are locked until{" "}
+                      {processingWindow.unlocksLabel}
+                      {lockedCount > 0
+                        ? ` — ${lockedCount} invoice${lockedCount === 1 ? " is" : "s are"} locked.`
+                        : "."}
+                    </div>
+                  </div>
+                )}
                 <div style={S.tableCard}>
                   <table style={S.table}>
                     <thead>
@@ -940,13 +989,16 @@ export default function PaymentProcessing() {
                         const paySS =
                           STATUS_STYLES[pay?.status] ||
                           STATUS_STYLES["Payment Pending"];
+                        const isRaiseableStatus = [
+                          "Payment Pending",
+                          "Partially Paid",
+                          "Payment Rejected",
+                        ].includes(pay?.status);
+                        const isCycleLocked =
+                          isRaiseableStatus && !!inv.cycleLock?.locked;
                         const canRaise =
-                          isAccounts &&
-                          [
-                            "Payment Pending",
-                            "Partially Paid",
-                            "Payment Rejected",
-                          ].includes(pay?.status);
+                          isAccounts && isRaiseableStatus && !isCycleLocked;
+                        const cycleTag = inv.paymentCycle?.assigned?.cycleLabel;
                         const isFullyPaid = pay?.status === "Fully Paid";
                         const hasActivePayment = [
                           "Payment Raised",
@@ -964,6 +1016,25 @@ export default function PaymentProcessing() {
                           <tr key={inv._id} style={S.tr}>
                             <td style={S.td}>
                               <span style={S.reqId}>{inv.requestId}</span>
+                              {cycleTag && (
+                                <div style={S.cycleTag}>{cycleTag}</div>
+                              )}
+                              {inv.creditNoteTotal > 0 && (
+                                <div
+                                  style={{ ...S.fixedTag, color: "#b91c1c", background: "#fef2f2", borderColor: "#fecaca" }}
+                                  title={`Reduced by approved credit notes. Original net payable ₹${Number(inv.originalTotals?.netPayable || 0).toLocaleString("en-IN")}`}
+                                >
+                                  🧾 CN −₹{Number(inv.creditNoteTotal).toLocaleString("en-IN")}
+                                </div>
+                              )}
+                              {inv.source === "fixed_payment" && (
+                                <div
+                                  style={S.fixedTag}
+                                  title="Fixed monthly payment — created and approved automatically"
+                                >
+                                  🔁 Fixed{inv.fixedPeriod ? ` · ${inv.fixedPeriod}` : ""}
+                                </div>
+                              )}
                             </td>
                             <td style={S.td}>{inv.invoiceNumber}</td>
                             <td style={S.td}>
@@ -1064,7 +1135,15 @@ export default function PaymentProcessing() {
                                 >
                                   🎉 Fully Paid
                                 </span>
+                              ) : isCycleLocked ? (
+                                <span
+                                  style={S.lockedChip}
+                                  title={inv.cycleLock.reason}
+                                >
+                                  🔒 Locked till {inv.cycleLock.unlocksLabel}
+                                </span>
                               ) : canRaise ? (
+                                <>
                                 <button
                                   style={{
                                     ...S.raiseBtn,
@@ -1088,6 +1167,22 @@ export default function PaymentProcessing() {
                                       ? "🔄 Re-raise Payment"
                                       : "💳 Raise Payment"}
                                 </button>
+                                {inv.source === "fixed_payment" &&
+                                  pay?.status === "Payment Pending" &&
+                                  !(pay?.paidAmount > 0) && (
+                                    <button
+                                      style={S.adjustBtn}
+                                      onClick={() => {
+                                        setAdjustInv(inv);
+                                        setAdjustAmount(String(inv.amount ?? ""));
+                                        setAdjustReason("");
+                                        setAdjustError("");
+                                      }}
+                                    >
+                                      Adjust amount
+                                    </button>
+                                  )}
+                                </>
                               ) : (
                                 <button
                                   style={S.viewBtn}
@@ -1628,6 +1723,68 @@ export default function PaymentProcessing() {
         )}
 
         {/* ── Raise Payment Modal ──────────────────────── */}
+        {/* ── Adjust fixed payment amount ─────────────── */}
+        {adjustInv && (
+          <div style={S.overlay}>
+            <div style={S.modal}>
+              <h3 style={S.modalTitle}>Adjust this month's amount</h3>
+              <p style={{ fontSize: 13, color: "#475569", margin: "0 0 12px" }}>
+                <strong>{adjustInv.requestId}</strong> · {adjustInv.vendor?.vendorName}
+                {adjustInv.fixedPeriod ? ` · ${adjustInv.fixedPeriod}` : ""}
+                <br />
+                Current base amount ₹{Number(adjustInv.amount || 0).toLocaleString("en-IN")}
+                {" "}(net ₹{Number(adjustInv.netPayable || 0).toLocaleString("en-IN")}).
+                GST % and TDS % stay as set on the fixed payment.
+              </p>
+              <label style={S.adjLabel}>New base amount (₹, before GST) *</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                style={S.adjInput}
+                value={adjustAmount}
+                onChange={(e) => setAdjustAmount(e.target.value)}
+              />
+              <label style={S.adjLabel}>Reason *</label>
+              <input
+                style={S.adjInput}
+                placeholder="e.g. Revised rent from this month"
+                value={adjustReason}
+                onChange={(e) => setAdjustReason(e.target.value)}
+              />
+              <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 10 }}>
+                Applies to this month only. To change every month, edit the
+                fixed payment (needs Super Admin approval).
+              </div>
+              {adjustError && <div style={S.adjError}>{adjustError}</div>}
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+                <button
+                  style={S.adjCancel}
+                  disabled={adjustSaving}
+                  onClick={() => setAdjustInv(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{
+                    ...S.adjSave,
+                    opacity:
+                      adjustSaving || !(parseFloat(adjustAmount) > 0) || adjustReason.trim().length < 3
+                        ? 0.5
+                        : 1,
+                  }}
+                  disabled={
+                    adjustSaving || !(parseFloat(adjustAmount) > 0) || adjustReason.trim().length < 3
+                  }
+                  onClick={handleAdjustAmount}
+                >
+                  {adjustSaving ? "Saving…" : "Save amount"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {raiseModal && (
           <div style={S.overlay}>
             <div style={S.modal}>
@@ -2261,6 +2418,105 @@ const S = {
     padding: "1px 7px",
     fontSize: 11,
     fontWeight: 700,
+  },
+  fixedTag: {
+    display: "inline-block",
+    marginTop: 4,
+    marginLeft: 4,
+    fontSize: 10.5,
+    fontWeight: 600,
+    color: "#7c3aed",
+    background: "#f5f3ff",
+    border: "1px solid #ddd6fe",
+    borderRadius: 999,
+    padding: "1px 8px",
+    whiteSpace: "nowrap",
+  },
+  adjustBtn: {
+    display: "block",
+    marginTop: 6,
+    background: "#fff",
+    border: "1px solid #cbd5e1",
+    borderRadius: 6,
+    padding: "4px 10px",
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: "#475569",
+    cursor: "pointer",
+  },
+  adjLabel: { display: "block", fontSize: 12.5, fontWeight: 600, color: "#475569", marginBottom: 5 },
+  adjInput: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "9px 11px",
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    fontSize: 14,
+    marginBottom: 12,
+  },
+  adjError: {
+    fontSize: 12.5,
+    color: "#b91c1c",
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 8,
+    padding: "8px 10px",
+    marginBottom: 10,
+  },
+  adjCancel: {
+    background: "#fff",
+    color: "#475569",
+    border: "1px solid #cbd5e1",
+    padding: "9px 18px",
+    borderRadius: 8,
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  adjSave: {
+    background: "#0f766e",
+    color: "#fff",
+    border: "none",
+    padding: "9px 18px",
+    borderRadius: 8,
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  cycleBanner: {
+    background: "#fffbeb",
+    border: "1px solid #fde68a",
+    borderLeft: "3px solid #d97706",
+    color: "#92400e",
+    borderRadius: 8,
+    padding: "10px 14px",
+    fontSize: 12.5,
+    lineHeight: 1.5,
+    marginBottom: 14,
+  },
+  cycleTag: {
+    display: "inline-block",
+    marginTop: 4,
+    fontSize: 10.5,
+    fontWeight: 600,
+    color: "#0f766e",
+    background: "#f0fdfa",
+    border: "1px solid #99f6e4",
+    borderRadius: 999,
+    padding: "1px 8px",
+    whiteSpace: "nowrap",
+  },
+  lockedChip: {
+    display: "inline-block",
+    fontSize: 11.5,
+    fontWeight: 600,
+    color: "#92400e",
+    background: "#fef3c7",
+    border: "1px solid #fde68a",
+    borderRadius: 6,
+    padding: "5px 9px",
+    whiteSpace: "nowrap",
+    cursor: "help",
   },
   infoBox: {
     background: "#eff6ff",

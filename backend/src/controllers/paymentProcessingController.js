@@ -32,6 +32,11 @@ const {
   contentDisposition,
   MIME_BY_EXT,
 } = require("../services/paymentDocumentService");
+const {
+  getProcessingWindow,
+  getProcessingLock,
+  publicWindow,
+} = require("../utils/paymentCycle");
 
 // "Payment Remark" cell = invoice remarks + description.
 // Remarks are frequently left blank, so the description keeps the column useful.
@@ -57,6 +62,8 @@ const PROCESSED_STATUSES = [
   PAYMENT_STATUS.PROCESSED,
   PAYMENT_STATUS.PARTIALLY_PAID,
   PAYMENT_STATUS.FULLY_PAID,
+  // Nothing to pay: an approved credit note took the payable to zero.
+  PAYMENT_STATUS.CLOSED_BY_CREDIT_NOTE,
 ];
 
 // Payment statuses that still need action on the "Approved Invoices" tab.
@@ -211,7 +218,7 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       }
     }
 
-    const invoices = await InvoiceRequest.find(query)
+    const invoiceDocs = await InvoiceRequest.find(query)
       .populate("branch", "name code bankAccounts")
       .populate(
         "vendor",
@@ -223,8 +230,41 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       .skip((currentPage - 1) * perPage)
       .limit(perPage);
 
+    // ── Payment-cycle processing lock (8–10 / 18–21) ─────────
+    // Derived at read time; nothing is written to the invoice.
+    const now = new Date();
+    const window = getProcessingWindow(now);
+    const invoices = invoiceDocs.map((doc) => {
+      const obj = doc.toObject();
+      obj.cycleLock = getProcessingLock(obj, now, window);
+      return obj;
+    });
+
+    // How many still-raiseable invoices are locked in this window, across
+    // all pages. Final approvals since the new rules all carry
+    // paymentCycle.assigned.recordedAt, so this index-backed filter is exact.
+    let lockedCount = 0;
+    if (window.active && req.query.withCounts === "true") {
+      const raiseablePayIds = await limitedIds(
+        PaymentProcessing,
+        {
+          status: { $in: RAISEABLE_STATUSES },
+          ...(baseQuery.branch ? { branch: baseQuery.branch } : {}),
+        },
+        5000,
+      );
+      lockedCount = await InvoiceRequest.countDocuments({
+        ...baseQuery,
+        paymentRequest: { $in: raiseablePayIds },
+        "paymentCycle.assigned.recordedAt": { $gt: window.lockAfter },
+        source: { $ne: "fixed_payment" }, // fixed payments are never locked
+      });
+    }
+
     res.json({
       invoices,
+      processingWindow: publicWindow(window), // { active, cycleLabel, ... }
+      lockedCount, // raiseable invoices locked in the current window
       total, // rows matching the active filter
       baseTotal, // rows ignoring the payment-status filter ("All")
       statusCounts, // { "Payment Pending": n, ... } or null
@@ -354,6 +394,31 @@ exports.raisePayment = async (req, res) => {
     if (invoice.status !== "Cluster Head Approved") {
       return res.status(403).json({
         message: "Invoice must be fully approved before raising payment",
+      });
+    }
+
+    // ✅ Payment-cycle lock: during a processing window (8–10 / 18–21),
+    //    invoices finally approved after that window's cut-off wait for
+    //    their own cycle. Server-side, so the UI cannot be bypassed.
+    const cycleLock = getProcessingLock(invoice);
+    if (cycleLock.locked) {
+      return res.status(423).json({
+        code: "CYCLE_LOCKED",
+        message: cycleLock.reason,
+        unlocksAt: cycleLock.unlocksAt,
+      });
+    }
+
+    // ✅ A credit note awaiting approval will change the amount payable —
+    //    paying now would pay the old amount.
+    const pendingCreditNote = await require("../models/CreditNote")
+      .findOne({ invoice: invoice._id, status: "pending_approval" })
+      .select("creditNoteId")
+      .lean();
+    if (pendingCreditNote) {
+      return res.status(409).json({
+        code: "CREDIT_NOTE_PENDING",
+        message: `Credit note ${pendingCreditNote.creditNoteId} is awaiting approval on this invoice. Approve or reject it before raising the payment.`,
       });
     }
 
@@ -2190,6 +2255,146 @@ exports.recordUTR = async (req, res) => {
   } catch (err) {
     console.error("UTR record error:", err);
     res.status(500).json({ message: err.message });
+  }
+};
+
+// ── PATCH /api/payments/:id/utr/correct  (super_admin only) ─
+// Corrects a UTR that was keyed in wrongly. Changes the reference text
+// ONLY: amounts, paid/remaining balances, statuses and the original
+// recorded-at/by stay exactly as they were. Old and new values plus the
+// reason go on the installment, on the payment, and into the AuditLog.
+exports.correctUTR = async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id))
+      return res.status(400).json({ message: "Invalid payment id" });
+
+    const { installmentRef, utrNumber, reason, allowDuplicate } =
+      req.body || {};
+
+    const utr = String(utrNumber || "")
+      .trim()
+      .toUpperCase();
+    if (!utr)
+      return res.status(400).json({ message: "New UTR number is required" });
+    if (/\s/.test(utr) || utr.length > 40)
+      return res.status(400).json({
+        message: "UTR must be a single reference of at most 40 characters",
+      });
+
+    const why = String(reason || "").trim();
+    if (why.length < 5)
+      return res
+        .status(400)
+        .json({ message: "Please give a reason for the correction" });
+
+    const payment = await PaymentProcessing.findById(req.params.id);
+    if (!payment) return res.status(404).json({ message: "Payment not found" });
+
+    // Which installment: the one named, else the latest that has a UTR.
+    let idx = -1;
+    if (installmentRef) {
+      const wanted = cleanRefInput(installmentRef);
+      idx = payment.installments.findIndex(
+        (inst) => cleanRefInput(inst?.paymentId) === wanted,
+      );
+    } else {
+      for (let i = payment.installments.length - 1; i >= 0; i--) {
+        if (payment.installments[i]?.utrNumber) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    const installment = idx >= 0 ? payment.installments[idx] : null;
+
+    // Legacy records may carry the UTR only on the payment itself.
+    const oldUtr = installment ? installment.utrNumber : payment.utrNumber;
+    if (!oldUtr) {
+      return res.status(400).json({
+        message:
+          "No UTR has been recorded on this payment yet — use Enter UTR instead",
+      });
+    }
+    if (oldUtr === utr)
+      return res
+        .status(400)
+        .json({ message: "The new UTR is the same as the current one" });
+
+    // A UTR normally identifies one bank transaction. Warn if it is already
+    // on another installment/payment; the admin can confirm and proceed.
+    if (!allowDuplicate) {
+      const sameHere = payment.installments.some(
+        (inst, i) => i !== idx && inst?.utrNumber === utr,
+      );
+      const elsewhere = await PaymentProcessing.findOne({
+        _id: { $ne: payment._id },
+        $or: [{ utrNumber: utr }, { "installments.utrNumber": utr }],
+      })
+        .select("paymentId")
+        .lean();
+      if (sameHere || elsewhere) {
+        return res.status(409).json({
+          code: "UTR_DUPLICATE",
+          message: `UTR ${utr} is already recorded on ${
+            elsewhere ? `payment ${elsewhere.paymentId}` : "another installment of this payment"
+          }. Save anyway?`,
+        });
+      }
+    }
+
+    const at = new Date();
+    const entry = {
+      stage: "UTR Corrected",
+      approvedBy: req.user._id,
+      action: "approved",
+      remarks: `UTR corrected from ${oldUtr} to ${utr}. Reason: ${why}`,
+      actionAt: at,
+    };
+
+    if (installment) {
+      installment.utrNumber = utr;
+      installment.approvalHistory.push(entry);
+    }
+    // Keep the top-level mirror (lists, reports, exports) in step when it
+    // was showing the value being corrected.
+    if (!installment || payment.utrNumber === oldUtr) payment.utrNumber = utr;
+    payment.approvalHistory.push(entry);
+
+    await payment.save();
+
+    try {
+      await logAction({
+        userId: req.user._id,
+        action: "CORRECT_UTR",
+        module: "Payment",
+        targetDoc: payment,
+        statusFrom: payment.status,
+        statusTo: payment.status,
+        reason: why,
+        oldValue: {
+          utrNumber: oldUtr,
+          installmentId: installment?.paymentId || null,
+        },
+        newValue: {
+          utrNumber: utr,
+          installmentId: installment?.paymentId || null,
+        },
+        req,
+      });
+    } catch (auditErr) {
+      console.error("UTR correction audit log failed:", auditErr);
+    }
+
+    res.json({
+      message: `UTR updated to ${utr}`,
+      paymentId: payment.paymentId,
+      installmentId: installment?.paymentId || null,
+      oldUtr,
+      utrNumber: utr,
+    });
+  } catch (err) {
+    console.error("UTR correction error:", err);
+    res.status(500).json({ message: "Could not update the UTR" });
   }
 };
 

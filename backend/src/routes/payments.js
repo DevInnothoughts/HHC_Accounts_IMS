@@ -76,5 +76,12 @@ router.patch(
   roleGuard(ROLES.ACCOUNTS, ROLES.SUPER_ADMIN),
   ctrl.recordUTR,
 );
+// Correct a wrongly entered UTR. Super admin only — Accounts records UTRs
+// but cannot change one once it is on the record.
+router.patch(
+  "/:id/utr/correct",
+  roleGuard(ROLES.SUPER_ADMIN),
+  ctrl.correctUTR,
+);
 
 module.exports = router;

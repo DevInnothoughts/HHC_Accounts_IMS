@@ -35,7 +35,12 @@ const { checkBudget } = require("../services/budgetService");
 const {
   checkDuplicateInvoice,
 } = require("../services/duplicateInvoiceService");
-const { resolvePaymentCycle, toStoredShape } = require("../utils/paymentCycle");
+const {
+  resolvePaymentCycle,
+  toStoredShape,
+  derivedStoredShape,
+} = require("../utils/paymentCycle");
+const access = require("../utils/vendorAccess");
 
 // ── Can this branch raise an invoice against this vendor right now? ──
 // Returns null when allowed, or { status, body } to send back.
@@ -140,10 +145,12 @@ const withDerivedCycle = (doc) => {
   const basis = finalApproval?.actionAt || obj.updatedAt;
   if (!basis) return obj;
 
-  const derived = resolvePaymentCycle(basis);
+  // Uses the rule in force on the approval date (old 7th/21st rule for
+  // approvals before the Oct 2026 change), so history is not rewritten.
   obj.paymentCycle = obj.paymentCycle || {};
   obj.paymentCycle.assigned = {
-    ...toStoredShape(derived, { recordedAt: new Date(basis) }),
+    ...derivedStoredShape(basis),
+    recordedAt: new Date(basis),
     derived: true, // lets the UI mark it as inferred rather than recorded
   };
   return obj;
@@ -153,11 +160,23 @@ exports.createInvoice = async (req, res) => {
   try {
     const { branch, vendor, expenseType, invoiceNumber, items } = req.body;
 
+    // ✅ Branch users and Accounts may only raise invoices for their own
+    //    assigned branches. (Was never checked; the vendor gate only proved
+    //    the vendor belonged to the branch, not the user.)
+    if (!branch || !access.canAccessBranch(req, branch)) {
+      return res
+        .status(403)
+        .json({ message: "You can only raise invoices for your assigned branches" });
+    }
+
     const gate = await vendorGate(vendor, branch);
     if (gate) return res.status(gate.status).json(gate.body);
 
     // ✅ Build payload and derive totals from line items when provided
     const payload = { ...req.body };
+    // Priority was removed from the form (Oct 2026). The field stays on the
+    // model with its "Normal" default so existing documents are untouched.
+    delete payload.priority;
     if (Array.isArray(items) && items.length > 0) {
       const totals = computeInvoiceTotals(items);
       if (totals.amount <= 0) {
@@ -244,12 +263,26 @@ exports.submitInvoice = async (req, res) => {
         .status(403)
         .json({ message: "You can only submit your own invoices" });
     }
-    // Accounts can submit any Rejected invoice (after fixing it)
-    if (isAccounts && invoice.status !== "Rejected") {
-      return res.status(403).json({
-        message: "Accounts can only resubmit rejected invoices",
-      });
+    // Accounts can submit any Rejected invoice (after fixing it) in their
+    // branches, and Drafts they created themselves. A branch user's draft
+    // stays the branch user's to submit.
+    if (isAccounts) {
+      if (!access.canAccessBranch(req, invoice.branch)) {
+        return res
+          .status(403)
+          .json({ message: "This invoice is not in your assigned branches" });
+      }
+      const isOwnDraft =
+        invoice.status === "Draft" &&
+        invoice.createdBy.toString() === req.user._id.toString();
+      if (invoice.status !== "Rejected" && !isOwnDraft) {
+        return res.status(403).json({
+          message:
+            "Accounts can submit their own drafts and resubmit rejected invoices",
+        });
+      }
     }
+    const previousStatus = invoice.status;
     if (!["Draft", "Rejected"].includes(invoice.status)) {
       return res.status(400).json({
         message: `Cannot submit invoice with status: ${invoice.status}`,
@@ -314,6 +347,22 @@ exports.submitInvoice = async (req, res) => {
           `<p>Invoice <strong>${invoice.requestId}</strong> has been submitted directly to accounts (no branch partner assigned).</p>`,
         ).catch(console.error);
       }
+    }
+
+    // Audit: submit had no log entry at all. Never allowed to turn a
+    // committed submit into an error.
+    try {
+      await logAction({
+        userId: req.user._id,
+        action: "SUBMIT_INVOICE",
+        module: "Invoice",
+        targetDoc: invoice,
+        statusFrom: previousStatus,
+        statusTo: invoice.status,
+        req,
+      });
+    } catch (auditErr) {
+      console.error("Submit audit log failed:", auditErr);
     }
 
     res.json(invoice);
@@ -472,11 +521,11 @@ exports.approveInvoice = async (req, res) => {
            <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;margin-top:12px;">
              <div style="font-size:13px;color:#0f766e;font-weight:600;">Payment Cycle</div>
              <div style="font-size:15px;color:#0f172a;font-weight:700;margin-top:4px;">
-               ${assignedCycle.cycleLabel} &middot; ${assignedCycle.paymentDateLabel}
+               ${assignedCycle.cycleLabel} &middot; ${assignedCycle.paymentWindowLabel}
              </div>
              <div style="font-size:12px;color:#64748b;margin-top:6px;">
-               If this date falls on a Sunday or a bank holiday, the payment will be
-               processed on the next working day.
+               Payment will be released within this window. If a day in the window
+               falls on a Sunday or a bank holiday, payment moves to the next working day.
              </div>
            </div>`,
         ).catch(console.error);
@@ -701,6 +750,11 @@ exports.updateInvoice = async (req, res) => {
     }
     // ── Accounts: can edit Draft, Rejected, or Submitted (before their approval)
     else if (isAccounts) {
+      if (!access.canAccessBranch(req, invoice.branch)) {
+        return res
+          .status(403)
+          .json({ message: "This invoice is not in your assigned branches" });
+      }
       if (
         !["Draft", "Rejected", "Submitted", "Partner Approved"].includes(
           invoice.status,
@@ -727,6 +781,7 @@ exports.updateInvoice = async (req, res) => {
     delete updateData.requestId;
     delete updateData.tdsPercentage; // ✅ TDS only set during approval, not edit
     delete updateData.tdsAmount; // ✅ recalculated during accounts approval
+    delete updateData.priority; // removed from the form; existing value kept
 
     if (Array.isArray(updateData.items) && updateData.items.length > 0) {
       const totals = computeInvoiceTotals(updateData.items);
@@ -749,6 +804,11 @@ exports.updateInvoice = async (req, res) => {
     const newBranch = updateData.branch ?? invoice.branch;
     const vendorChanged = String(newVendor) !== String(invoice.vendor);
     const branchChanged = String(newBranch) !== String(invoice.branch);
+    if (branchChanged && !access.canAccessBranch(req, newBranch)) {
+      return res
+        .status(403)
+        .json({ message: "You can only move invoices to your assigned branches" });
+    }
     if (vendorChanged || branchChanged) {
       const gate = await vendorGate(newVendor, newBranch);
       if (gate) return res.status(gate.status).json(gate.body);

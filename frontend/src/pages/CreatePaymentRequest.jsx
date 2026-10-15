@@ -13,25 +13,7 @@ import {
   PaymentCycleModal,
 } from "../components/PaymentCycleWidgets.jsx";
 
-const PRIORITY_OPTIONS = ["Normal", "Urgent", "Critical"];
 const EXPENSE_TYPES = ["Revenue", "Capital"];
-const PRIORITY_INFO = {
-  Normal: {
-    color: "#2563eb",
-    bg: "#eff6ff",
-    desc: "Standard processing timeline",
-  },
-  Urgent: {
-    color: "#d97706",
-    bg: "#fffbeb",
-    desc: "Needs processing within 24–48 hrs",
-  },
-  Critical: {
-    color: "#dc2626",
-    bg: "#fef2f2",
-    desc: "Requires immediate attention",
-  },
-};
 const STEPS = [
   "Basic Info",
   "Financial Details",
@@ -54,7 +36,6 @@ const INIT = {
   invoiceDate: "",
   dueDate: "",
   description: "",
-  priority: "Normal",
   remarks: "",
 };
 
@@ -87,7 +68,8 @@ export default function CreatePaymentRequest() {
         setBranches(Array.isArray(r.data) ? r.data : r.data.branches || []),
       )
       .catch(console.error);
-    if (user?.role === "branch_user" && user.branches?.length === 1) {
+    if (["branch_user", "accounts"].includes(user?.role) &&
+      user.branches?.length === 1) {
       setForm((f) => ({
         ...f,
         branch: user.branches[0]._id || user.branches[0],
@@ -389,7 +371,7 @@ export default function CreatePaymentRequest() {
                     placeholder="Select Branch"
                     error={!!errors.branch}
                     disabled={
-                      user?.role === "branch_user" &&
+                      ["branch_user", "accounts"].includes(user?.role) &&
                       user.branches?.length === 1
                     }
                   />
@@ -475,46 +457,6 @@ export default function CreatePaymentRequest() {
                     placeholder="Select Category"
                     error={!!errors.expenseCategory}
                   />
-                </Field>
-                <Field label="Priority *" error={errors.priority} fullWidth>
-                  <div style={S.radioGroup}>
-                    {PRIORITY_OPTIONS.map((p) => {
-                      const pi = PRIORITY_INFO[p];
-                      return (
-                        <label
-                          key={p}
-                          style={{
-                            ...S.priorityOption,
-                            ...(form.priority === p
-                              ? {
-                                  ...S.prioritySelected,
-                                  background: pi.bg,
-                                  borderColor: pi.color,
-                                  color: pi.color,
-                                }
-                              : {}),
-                          }}
-                        >
-                          <input
-                            type="radio"
-                            name="priority"
-                            value={p}
-                            checked={form.priority === p}
-                            onChange={set("priority")}
-                            style={{ display: "none" }}
-                          />
-                          <div style={{ fontWeight: 700, fontSize: 14 }}>
-                            {p}
-                          </div>
-                          <div
-                            style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}
-                          >
-                            {pi.desc}
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
                 </Field>
               </div>
             </div>
@@ -705,16 +647,6 @@ export default function CreatePaymentRequest() {
                     value={selectedVendor?.vendorName}
                   />
                   <ReviewRow label="Category" value={selectedCategory?.name} />
-                  <ReviewRow label="Priority">
-                    <span
-                      style={{
-                        color: PRIORITY_INFO[form.priority]?.color,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {form.priority}
-                    </span>
-                  </ReviewRow>
                 </ReviewSection>
                 <ReviewSection title="Financial Summary">
                   <ReviewRow

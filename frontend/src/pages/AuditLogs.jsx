@@ -10,6 +10,7 @@ import React from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
+import { roleLabel } from "../utils/roleLabel.js";
 
 const C = {
   primary: "#1a3c6e",
@@ -27,14 +28,6 @@ const TONE = {
   neutral: { dot: "#64748b", bg: "#f8fafc", border: C.line, text: "#475569" },
 };
 
-const ROLE_LABELS = {
-  branch_user: "Branch User",
-  branch_partner: "Branch Partner",
-  cluster_head: "Cluster Head",
-  accounts: "Accounts",
-  director: "Director",
-  super_admin: "Super Admin",
-};
 
 const fmt = (n) =>
   n === null || n === undefined
@@ -293,7 +286,7 @@ export default function AuditLogs() {
                   <option value="">Anyone</option>
                   {options.users.map((u) => (
                     <option key={u._id} value={u._id}>
-                      {u.name} — {ROLE_LABELS[u.role] || u.role}
+                      {u.name} — {roleLabel(u)}
                     </option>
                   ))}
                 </select>
@@ -454,7 +447,7 @@ function EventRow({ log, last, expanded, onToggle, navigate }) {
           </span>
           {log.actor.role && (
             <span style={S.roleTag}>
-              {ROLE_LABELS[log.actor.role] || log.actor.role}
+              {roleLabel(log.actor)}
             </span>
           )}
           <span style={{ color: tone.text, fontWeight: 600 }}>
@@ -656,7 +649,7 @@ function TrailView({ ref_, setRef, onSearch, loading, trail, navigate }) {
                       {e.actor.name}
                       {e.actor.role && (
                         <span style={S.roleTag}>
-                          {ROLE_LABELS[e.actor.role] || e.actor.role}
+                          {roleLabel(e.actor)}
                         </span>
                       )}
                       <span style={{ color: tone.text, marginLeft: 6 }}>

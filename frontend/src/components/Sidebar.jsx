@@ -5,6 +5,7 @@
 import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext.jsx";
+import { roleLabel } from "../utils/roleLabel.js";
 
 const navItems = [
   { label: "Dashboard", path: "/dashboard", icon: "🏠", roles: ["all"] },
@@ -19,6 +20,19 @@ const navItems = [
     path: "/payments",
     icon: "💳",
     roles: ["all"],
+  },
+  // Fixed monthly payments — set up by Accounts, approved by Super Admin
+  {
+    label: "Fixed Payments",
+    path: "/fixed-payments",
+    icon: "🔁",
+    roles: ["accounts", "super_admin"],
+  },
+  {
+    label: "Credit Notes",
+    path: "/credit-notes",
+    icon: "🧾",
+    roles: ["branch_user", "accounts", "super_admin"],
   },
   // ✅ Vendor Master — group-level record per PAN (req 6: accounts/admin)
   {
@@ -138,7 +152,7 @@ export default function Sidebar() {
           <div style={styles.avatar}>{user?.name?.[0]?.toUpperCase()}</div>
           <div>
             <div style={styles.userName}>{user?.name}</div>
-            <div style={styles.userRole}>{user?.role?.replace(/_/g, " ")}</div>
+            <div style={styles.userRole}>{roleLabel(user)}</div>
           </div>
         </div>
         <button onClick={handleLogout} style={styles.logoutBtn}>

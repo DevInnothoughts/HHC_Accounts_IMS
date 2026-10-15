@@ -9,6 +9,10 @@ import {
   AttachmentChips,
   AttachmentPreview,
 } from "../components/AttachmentChips.jsx";
+import {
+  usePaymentCycle,
+  ApprovalCycleNotice,
+} from "../components/PaymentCycleWidgets.jsx";
 
 const STATUS_STYLES = {
   Draft: { bg: "#f1f5f9", color: "#475569", icon: "📝" },
@@ -19,12 +23,6 @@ const STATUS_STYLES = {
   Rejected: { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
-const PRIORITIES = ["", "Normal", "Urgent", "Critical"];
-const PRIORITY_COLORS = {
-  Normal: "#2563eb",
-  Urgent: "#d97706",
-  Critical: "#dc2626",
-};
 
 const STATUSES = [
   "",
@@ -59,16 +57,25 @@ export default function InvoiceRequests() {
   const [filters, setFilters] = useState(() => {
     const urlFilters = {
       status: searchParams.get("status") || "",
-      priority: searchParams.get("priority") || "",
+      priority: "", // priority filter removed (Oct 2026)
       branch: searchParams.get("branch") || "",
       from: searchParams.get("from") || "",
       to: searchParams.get("to") || "",
     };
     if (Object.values(urlFilters).some((v) => v)) return urlFilters;
-    return { ...urlFilters, ...(savedState.filters || {}) };
+    return { ...urlFilters, ...(savedState.filters || {}), priority: "" };
   });
   const [branches, setBranches] = useState([]);
   const [actionLoading, setActionLoading] = useState("");
+  // Quick-approve popup: every approval shows the payment cycle first.
+  const [approveTarget, setApproveTarget] = useState(null); // invoice row
+  const [approveTds, setApproveTds] = useState("");
+  const [approveError, setApproveError] = useState("");
+  const {
+    cycle,
+    loading: cycleLoading,
+    reload: reloadCycle,
+  } = usePaymentCycle();
   const [search, setSearch] = useState(savedState.search || "");
   const [debouncedSearch, setDebouncedSearch] = useState(
     savedState.search || "",
@@ -90,31 +97,40 @@ export default function InvoiceRequests() {
     );
   }, [filters, search]);
 
-  const handleQuickApprove = async (e, invoiceId) => {
+  // Opens the approval popup (payment cycle + TDS for accounts).
+  const handleQuickApprove = (e, inv) => {
     e.stopPropagation(); // prevent row click navigation
+    reloadCycle();
+    setApproveTds(user?.role === "accounts" ? "0" : "");
+    setApproveError("");
+    setApproveTarget(inv);
+  };
 
-    // Accounts approval requires a TDS % — collect it before approving
+  const confirmQuickApprove = async () => {
+    const inv = approveTarget;
+    if (!inv) return;
+
+    // Accounts approval requires a TDS %
     let tdsPercentage;
     if (user?.role === "accounts") {
-      const input = window.prompt("Enter TDS % for this invoice (0–100):", "0");
-      if (input === null) return; // cancelled
-      const tds = parseFloat(input);
-      if (isNaN(tds) || tds < 0 || tds > 100) {
-        alert("TDS percentage must be a number between 0 and 100.");
+      const tds = parseFloat(approveTds);
+      if (approveTds === "" || isNaN(tds) || tds < 0 || tds > 100) {
+        setApproveError("TDS percentage must be a number between 0 and 100.");
         return;
       }
       tdsPercentage = tds;
     }
 
-    setActionLoading(`approve_${invoiceId}`);
+    setActionLoading(`approve_${inv._id}`);
     try {
-      await api.patch(`/invoices/${invoiceId}/approve`, {
+      await api.patch(`/invoices/${inv._id}/approve`, {
         remarks: "",
         ...(tdsPercentage !== undefined && { tdsPercentage }),
       });
+      setApproveTarget(null);
       fetchInvoices();
     } catch (err) {
-      alert(err.response?.data?.message || "Approval failed");
+      setApproveError(err.response?.data?.message || "Approval failed");
     } finally {
       setActionLoading("");
     }
@@ -178,7 +194,7 @@ export default function InvoiceRequests() {
             <h1 style={S.title}>📋 Invoice Processing</h1>
             <p style={S.sub}>{total} total invoices</p>
           </div>
-          {user?.role === "branch_user" && (
+          {["branch_user", "accounts"].includes(user?.role) && (
             <button
               style={S.createBtn}
               onClick={() => navigate("/invoices/new")}
@@ -207,20 +223,6 @@ export default function InvoiceRequests() {
             {STATUSES.map((s) => (
               <option key={s} value={s}>
                 {s || "All Statuses"}
-              </option>
-            ))}
-          </select>
-          <select
-            style={S.select}
-            value={filters.priority}
-            onChange={(e) => {
-              setFilters((f) => ({ ...f, priority: e.target.value }));
-              setPage(1);
-            }}
-          >
-            {PRIORITIES.map((p) => (
-              <option key={p} value={p}>
-                {p || "All Priorities"}
               </option>
             ))}
           </select>
@@ -296,7 +298,7 @@ export default function InvoiceRequests() {
           ) : invoices.length === 0 ? (
             <div style={S.empty}>
               No invoices found.
-              {user?.role === "branch_user" && (
+              {["branch_user", "accounts"].includes(user?.role) && (
                 <span
                   style={{ color: "#2563eb", cursor: "pointer", marginLeft: 6 }}
                   onClick={() => navigate("/invoices/new")}
@@ -314,7 +316,6 @@ export default function InvoiceRequests() {
                     "Branch",
                     "Vendor",
                     "Amount",
-                    "Priority",
                     "Status",
                     "Date",
                     "Docs",
@@ -338,6 +339,23 @@ export default function InvoiceRequests() {
                     >
                       <td style={S.td}>
                         <span style={S.reqId}>{inv.requestId}</span>
+                        {inv.source === "fixed_payment" && (
+                          <span
+                            title="Fixed monthly payment — auto-created and auto-approved"
+                            style={{
+                              marginLeft: 6,
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              color: "#7c3aed",
+                              background: "#f5f3ff",
+                              border: "1px solid #ddd6fe",
+                              borderRadius: 999,
+                              padding: "1px 7px",
+                            }}
+                          >
+                            🔁 Fixed
+                          </span>
+                        )}
                       </td>
                       <td style={S.td}>{inv.branch?.name || "—"}</td>
                       <td style={S.td}>
@@ -350,18 +368,6 @@ export default function InvoiceRequests() {
                       </td>
                       <td style={{ ...S.td, fontWeight: 600 }}>
                         ₹{inv.netPayable?.toLocaleString("en-IN")}
-                      </td>
-                      <td style={S.td}>
-                        <span
-                          style={{
-                            ...S.badge,
-                            color: PRIORITY_COLORS[inv.priority],
-                            background: PRIORITY_COLORS[inv.priority] + "18",
-                            border: `1px solid ${PRIORITY_COLORS[inv.priority]}30`,
-                          }}
-                        >
-                          {inv.priority}
-                        </span>
                       </td>
                       <td style={S.td}>
                         <span
@@ -438,9 +444,7 @@ export default function InvoiceRequests() {
                                     fontWeight: 700,
                                   }}
                                   disabled={approveLoading || rejectLoading}
-                                  onClick={(e) =>
-                                    handleQuickApprove(e, inv._id)
-                                  }
+                                  onClick={(e) => handleQuickApprove(e, inv)}
                                 >
                                   {approveLoading ? "⏳" : "✓"}
                                 </button>
@@ -510,12 +514,147 @@ export default function InvoiceRequests() {
             onClose={() => setPreview(null)}
           />
         )}
+        {/* ── Quick-approve popup ─────────────────────────── */}
+        {approveTarget && (
+          <div
+            style={QA.overlay}
+            onClick={() => !actionLoading && setApproveTarget(null)}
+          >
+            <div
+              style={QA.modal}
+              role="dialog"
+              aria-modal="true"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 style={QA.title}>✅ Approve Invoice</h3>
+              <p style={QA.sub}>
+                Approving <strong>{approveTarget.requestId}</strong>
+                {approveTarget.vendor?.vendorName
+                  ? ` · ${approveTarget.vendor.vendorName}`
+                  : ""}
+              </p>
+
+              <ApprovalCycleNotice
+                cycle={cycle}
+                loading={cycleLoading}
+                isFinalApproval={approveTarget.status === "Accounts Approved"}
+              />
+
+              {user?.role === "accounts" && (
+                <div style={{ marginBottom: 12 }}>
+                  <label style={QA.label}>TDS Percentage (%) *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    style={QA.input}
+                    value={approveTds}
+                    onChange={(e) => setApproveTds(e.target.value)}
+                  />
+                </div>
+              )}
+
+              {approveError && <div style={QA.error}>{approveError}</div>}
+
+              <div style={QA.actions}>
+                <button
+                  style={QA.cancel}
+                  disabled={!!actionLoading}
+                  onClick={() => setApproveTarget(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  style={{ ...QA.confirm, opacity: actionLoading ? 0.6 : 1 }}
+                  disabled={!!actionLoading}
+                  onClick={confirmQuickApprove}
+                >
+                  {actionLoading ? "Approving…" : "✓ Confirm Approve"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
 }
 
 const C = { primary: "#1a3c6e", accent: "#2563eb", border: "#e2e8f0" };
+const QA = {
+  overlay: {
+    position: "fixed",
+    inset: 0,
+    background: "rgba(15,23,42,0.55)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1000,
+    padding: 16,
+  },
+  modal: {
+    background: "#fff",
+    borderRadius: 12,
+    padding: "20px 22px",
+    width: "100%",
+    maxWidth: 460,
+    boxShadow: "0 20px 45px rgba(0,0,0,0.22)",
+  },
+  title: { margin: 0, fontSize: 17, fontWeight: 700, color: "#1a3c6e" },
+  sub: { fontSize: 13, color: "#64748b", margin: "6px 0 14px" },
+  label: {
+    display: "block",
+    fontSize: 12,
+    fontWeight: 600,
+    color: "#475569",
+    marginBottom: 5,
+  },
+  input: {
+    width: "100%",
+    boxSizing: "border-box",
+    padding: "9px 12px",
+    border: "1px solid #cbd5e1",
+    borderRadius: 8,
+    fontSize: 14,
+  },
+  error: {
+    fontSize: 12.5,
+    color: "#b91c1c",
+    background: "#fef2f2",
+    border: "1px solid #fecaca",
+    borderRadius: 8,
+    padding: "8px 10px",
+    marginBottom: 10,
+  },
+  actions: {
+    display: "flex",
+    gap: 10,
+    justifyContent: "flex-end",
+    marginTop: 14,
+  },
+  cancel: {
+    background: "#fff",
+    color: "#475569",
+    border: "1px solid #cbd5e1",
+    padding: "9px 18px",
+    borderRadius: 8,
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  confirm: {
+    background: "#16a34a",
+    color: "#fff",
+    border: "none",
+    padding: "9px 18px",
+    borderRadius: 8,
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+};
+
 const S = {
   layout: { display: "flex", minHeight: "100vh", background: "#f8fafc" },
   main: { flex: 1, padding: "24px 28px", overflowY: "auto" },

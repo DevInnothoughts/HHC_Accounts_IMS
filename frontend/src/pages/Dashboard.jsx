@@ -193,7 +193,9 @@ export default function Dashboard() {
               {greet()}, <strong>{user?.name}</strong> 👋
             </div>
             <div style={S.rolePill}>
-              {ROLE_LABELS[user?.role] || user?.role}
+              {user?.role === "cluster_head" && user?.designation
+                ? user.designation
+                : ROLE_LABELS[user?.role] || user?.role}
               {user?.branches?.length > 0 && (
                 <span style={S.branchPill}>
                   {user.branches.map((b) => b.name || b).join(", ")}
@@ -578,6 +580,12 @@ export default function Dashboard() {
             )}
             {user?.role === "accounts" && (
               <>
+                <QuickAction
+                  icon="📋"
+                  label="New Invoice"
+                  color="#0f766e"
+                  onClick={() => navigate("/invoices/new")}
+                />
                 <QuickAction
                   icon="✅"
                   label="Review Invoices"

@@ -37,12 +37,18 @@ const invoiceItemSchema = new mongoose.Schema(
 
 // Payment cycle. Both blocks are optional, so every existing invoice
 // document stays valid and no migration is required.
+// Oct 2026: enum WIDENED (old 7th/21st keys kept so existing documents
+// still validate) and paymentEndDate added as an optional field.
 const paymentCycleSnapshotSchema = new mongoose.Schema(
   {
-    cycleKey: { type: String, enum: ["CYCLE_7", "CYCLE_21"] },
+    cycleKey: {
+      type: String,
+      enum: ["CYCLE_7", "CYCLE_21", "CYCLE_FIRST", "CYCLE_SECOND"],
+    },
     cycleLabel: { type: String },
     cutoffDate: { type: Date },
-    paymentDate: { type: Date },
+    paymentDate: { type: Date }, // first day of the bank payment window
+    paymentEndDate: { type: Date }, // last day of the bank payment window
     basisDate: { type: String }, // "YYYY-MM-DD" in IST
     recordedAt: { type: Date, default: Date.now },
   },
@@ -121,9 +127,60 @@ const invoiceRequestSchema = new mongoose.Schema(
       // Fixed when the Cluster Head gives final approval. Authoritative.
       assigned: { type: paymentCycleSnapshotSchema, default: undefined },
     },
+
+    // ── Credit notes — Oct 2026 ────────────────────────────
+    // All optional. Written only when a credit note is APPROVED.
+    // originalTotals: the invoice's figures before its first credit note,
+    // so the original value is never lost. amount / gstAmount / tdsAmount /
+    // netPayable on the invoice then hold the figures AFTER credit notes,
+    // which is what payments, budgets and reports use.
+    originalTotals: {
+      type: {
+        _id: false,
+        amount: Number,
+        gstAmount: Number,
+        tdsAmount: Number,
+        roundOff: Number,
+        netPayable: Number,
+      },
+      default: undefined,
+    },
+    creditNoteTotal: { type: Number, default: undefined }, // sum of net reductions
+    creditNoteRefundDue: { type: Number, default: undefined }, // vendor to refund outside PMS
+
+    // ── Fixed (recurring) payments — Oct 2026 ──────────────
+    // All optional: ordinary invoices never carry them.
+    // source "fixed_payment" = created automatically from an approved
+    // FixedPayment template, already at "Cluster Head Approved".
+    source: { type: String, enum: ["fixed_payment"], default: undefined },
+    fixedPayment: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "FixedPayment",
+      default: undefined,
+    },
+    fixedPeriod: { type: String, default: undefined }, // "YYYY-MM"
+    // Month-specific amount changes made by Accounts before payment.
+    fixedAmountAdjustments: {
+      type: [
+        {
+          _id: false,
+          from: Number, // previous base amount
+          to: Number, // new base amount
+          by: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+          at: { type: Date, default: Date.now },
+          reason: { type: String, trim: true },
+        },
+      ],
+      default: undefined,
+    },
   },
   { timestamps: true },
 );
+
+// One invoice per template per month is enforced by the unique partial
+// index "uniq_fixed_payment_period", built by
+// scripts/createFixedPaymentIndexes.js (kept out of the schema, like the
+// other indexes, so autoIndex does not retry it on every boot).
 
 // Supports the Accounts payment queue filtered by cycle. Sparse, so
 // only invoices that have reached final approval enter the index.

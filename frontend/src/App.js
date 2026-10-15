@@ -27,6 +27,8 @@ import AuditLogs from "./pages/AuditLogs.jsx";
 import BudgetManagement from "./pages/BudgetManagement.jsx";
 import SLADashboard from "./pages/SLADashboard.jsx";
 import PrimaryReports from "./pages/PrimaryReports.jsx";
+import FixedPayments from "./pages/FixedPayments.jsx";
+import CreditNotes from "./pages/CreditNotes.jsx";
 
 const ProtectedRoute = ({ children, roles }) => {
   const { user } = useAuth();
@@ -68,7 +70,7 @@ export default function App() {
           <Route
             path="/invoices/new"
             element={
-              <ProtectedRoute roles={["branch_user"]}>
+              <ProtectedRoute roles={["branch_user", "accounts"]}>
                 <CreatePaymentRequest />
               </ProtectedRoute>
             }
@@ -88,6 +90,28 @@ export default function App() {
                 roles={["branch_user", "accounts", "super_admin"]}
               >
                 <EditPaymentRequest />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Fixed (recurring) monthly payments */}
+          <Route
+            path="/fixed-payments"
+            element={
+              <ProtectedRoute roles={["accounts", "super_admin"]}>
+                <FixedPayments />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Credit notes against approved invoices */}
+          <Route
+            path="/credit-notes"
+            element={
+              <ProtectedRoute
+                roles={["branch_user", "accounts", "super_admin"]}
+              >
+                <CreditNotes />
               </ProtectedRoute>
             }
           />

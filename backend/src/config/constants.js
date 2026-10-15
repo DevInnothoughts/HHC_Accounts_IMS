@@ -17,6 +17,16 @@ module.exports = {
     DIRECTOR: "director",
   },
 
+  // ── Designations (display labels only) ───────────────────
+  // "Department Head" is a Cluster Head under another title: the role
+  // stored on the user stays "cluster_head", so every permission, approval
+  // step, branch scope and notification is identical. Only the label shown
+  // in the UI and audit trail differs. No designation = "Cluster Head".
+  DESIGNATIONS: {
+    CLUSTER_HEAD: "Cluster Head",
+    DEPARTMENT_HEAD: "Department Head",
+  },
+
   // ── Invoice Processing Statuses ──────────────────────────
   INVOICE_STATUS: {
     DRAFT: "Draft",
@@ -37,6 +47,7 @@ module.exports = {
     PARTIALLY_PAID: "Partially Paid",
     FULLY_PAID: "Fully Paid",
     REJECTED: "Payment Rejected",
+    CLOSED_BY_CREDIT_NOTE: "Closed by Credit Note",
   },
 
   INVOICE_WORKFLOW: [

@@ -5,13 +5,52 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const Branch = require("../models/Branch");
 const { logAction } = require("../services/auditService");
-const { ROLES } = require("../config/constants");
+const { ROLES, DESIGNATIONS } = require("../config/constants");
+
+// "department_head" is accepted from the UI as a convenience, but it is
+// stored as role cluster_head + designation "Department Head", so all
+// Cluster Head rights apply unchanged. A designation is only kept for
+// cluster_head users. Returns the update to apply.
+const normalizeRoleAndDesignation = (body) => {
+  const out = { ...body };
+  if (out.role === "department_head") {
+    out.role = ROLES.CLUSTER_HEAD;
+    out.designation = DESIGNATIONS.DEPARTMENT_HEAD;
+  }
+  if (out.role === undefined) {
+    // Role not being changed: only accept a valid designation, if any.
+    if (out.designation !== undefined &&
+        !Object.values(DESIGNATIONS).includes(out.designation)) {
+      delete out.designation;
+    }
+    return { set: out, unset: false };
+  }
+  if (out.role === ROLES.CLUSTER_HEAD) {
+    if (!Object.values(DESIGNATIONS).includes(out.designation)) {
+      out.designation = DESIGNATIONS.CLUSTER_HEAD;
+    }
+    return { set: out, unset: false };
+  }
+  delete out.designation;
+  return { set: out, unset: true }; // not a cluster head: drop any label
+};
 
 exports.getUsers = async (req, res) => {
   try {
     const { role, status, search, branch, page = 1, limit = 20 } = req.query;
     const query = {};
-    if (role) query.role = role;
+    // role=cluster_head still returns EVERY cluster head (both labels), so
+    // any caller that means "all approvers of that level" keeps working.
+    // role=department_head, or ?designation=, narrows by label.
+    if (role === "department_head") {
+      query.role = ROLES.CLUSTER_HEAD;
+      query.designation = DESIGNATIONS.DEPARTMENT_HEAD;
+    } else if (role) {
+      query.role = role;
+    }
+    if (req.query.designation === DESIGNATIONS.CLUSTER_HEAD) {
+      query.designation = { $ne: DESIGNATIONS.DEPARTMENT_HEAD };
+    }
     if (status) query.status = status;
 
     // `branches` is an array on User, so an equality match on the field
@@ -70,7 +109,8 @@ exports.createUser = async (req, res) => {
     if (existing)
       return res.status(400).json({ message: "Email already registered" });
 
-    const user = await User.create({ ...req.body, createdBy: req.user._id });
+    const { set } = normalizeRoleAndDesignation(req.body);
+    const user = await User.create({ ...set, createdBy: req.user._id });
     await logAction({
       userId: req.user._id,
       action: "CREATE_USER",
@@ -86,7 +126,9 @@ exports.createUser = async (req, res) => {
 
 exports.updateUser = async (req, res) => {
   try {
-    const user = await User.findByIdAndUpdate(req.params.id, req.body, {
+    const { set, unset } = normalizeRoleAndDesignation(req.body);
+    const update = unset ? { ...set, $unset: { designation: 1 } } : set;
+    const user = await User.findByIdAndUpdate(req.params.id, update, {
       new: true,
       runValidators: true,
     }).populate("branches", "name code");

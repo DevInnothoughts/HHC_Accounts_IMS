@@ -5,11 +5,13 @@ import { useState, useEffect, useCallback } from "react";
 import React from "react";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
+import { ROLE_LABELS, uiRoleOf } from "../utils/roleLabel.js";
 
 const ROLES_LIST = [
   "branch_user",
   "branch_partner",
   "cluster_head",
+  "department_head", // = Cluster Head rights, different label
   "accounts",
   "director",
   "super_admin",
@@ -18,17 +20,10 @@ const ROLE_COLORS = {
   branch_user: "#2563eb",
   branch_partner: "#7c3aed",
   cluster_head: "#d97706",
+  department_head: "#0891b2",
   accounts: "#16a34a",
   director: "#dc2626",
   super_admin: "#0f172a",
-};
-const ROLE_LABELS = {
-  branch_user: "Branch User",
-  branch_partner: "Branch Partner",
-  cluster_head: "Cluster Head",
-  accounts: "Accounts",
-  director: "Director",
-  super_admin: "Super Admin",
 };
 
 const INIT_USER = {
@@ -63,7 +58,10 @@ export default function UserManagement() {
         page,
         limit: 15,
         ...(search && { search }),
+        // "Cluster Head" filter excludes users labelled Department Head;
+        // "department_head" is understood by the API as the label.
         ...(filterRole && { role: filterRole }),
+        ...(filterRole === "cluster_head" && { designation: "Cluster Head" }),
         ...(filterStatus && { status: filterStatus }),
         ...(filterBranch && { branch: filterBranch }),
       });
@@ -109,11 +107,16 @@ export default function UserManagement() {
     if (!validate()) return;
     setSaving(true);
     try {
+      // The role picker decides the label, so never send a stale
+      // designation; the API stores department_head as cluster_head +
+      // designation "Department Head".
+      const payload = { ...form };
+      delete payload.designation;
       if (modal === "create") {
-        await api.post("/users", form);
+        await api.post("/users", payload);
         setSuccess("User created successfully!");
       } else {
-        await api.put(`/users/${form._id}`, form);
+        await api.put(`/users/${form._id}`, payload);
         setSuccess("User updated successfully!");
       }
       setModal(null);
@@ -137,7 +140,11 @@ export default function UserManagement() {
   };
 
   const openEdit = (user) => {
-    setForm({ ...user, branches: user.branches?.map((b) => b._id || b) || [] });
+    setForm({
+      ...user,
+      role: uiRoleOf(user), // shows "Department Head" for those users
+      branches: user.branches?.map((b) => b._id || b) || [],
+    });
     setErrors({});
     setModal("edit");
   };
@@ -273,8 +280,8 @@ export default function UserManagement() {
                         <div
                           style={{
                             ...S.avatar,
-                            background: ROLE_COLORS[u.role] + "22",
-                            color: ROLE_COLORS[u.role],
+                            background: ROLE_COLORS[uiRoleOf(u)] + "22",
+                            color: ROLE_COLORS[uiRoleOf(u)],
                           }}
                         >
                           {u.name?.[0]?.toUpperCase()}
@@ -290,11 +297,11 @@ export default function UserManagement() {
                       <span
                         style={{
                           ...S.roleBadge,
-                          background: ROLE_COLORS[u.role] + "15",
-                          color: ROLE_COLORS[u.role],
+                          background: ROLE_COLORS[uiRoleOf(u)] + "15",
+                          color: ROLE_COLORS[uiRoleOf(u)],
                         }}
                       >
-                        {ROLE_LABELS[u.role]}
+                        {ROLE_LABELS[uiRoleOf(u)]}
                       </span>
                     </td>
                     <td style={S.td}>

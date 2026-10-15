@@ -83,6 +83,22 @@ const TARGETS = {
     route: () => `/expense-categories`,
     noun: "expense category",
   },
+  FixedPayment: {
+    model: () => require("../models/FixedPayment"),
+    select: "templateId title status branch vendor amount",
+    label: (d) => `${d.templateId}${d.title ? ` · ${d.title}` : ""}`,
+    amount: (d) => d.amount,
+    route: () => `/fixed-payments`,
+    noun: "fixed payment",
+  },
+  CreditNote: {
+    model: () => require("../models/CreditNote"),
+    select: "creditNoteId vendorCreditNoteNumber status branch vendor netReduction invoice",
+    label: (d) => d.creditNoteId,
+    amount: (d) => d.netReduction,
+    route: () => `/credit-notes`,
+    noun: "credit note",
+  },
   SLA: {
     model: () => require("../models/SLAConfig"),
     select: "stage stageLabel hoursAllowed",
@@ -132,6 +148,21 @@ const VERBS = {
   CREATE_USER: "created",
   UPDATE_USER: "edited",
   UPDATE_SLA_CONFIG: "changed",
+  CORRECT_UTR: "corrected the UTR on",
+  CREATE_FIXED_PAYMENT: "set up",
+  UPDATE_FIXED_PAYMENT: "edited",
+  APPROVE_FIXED_PAYMENT: "approved",
+  REJECT_FIXED_PAYMENT: "rejected",
+  PAUSE_FIXED_PAYMENT: "paused",
+  RESUME_FIXED_PAYMENT: "resumed",
+  END_FIXED_PAYMENT: "ended",
+  UPLOAD_FIXED_PAYMENT_AGREEMENT: "uploaded the agreement for",
+  AUTO_GENERATE_FIXED_INVOICE: "auto-generated",
+  ADJUST_FIXED_INVOICE_AMOUNT: "adjusted the amount of",
+  CREATE_CREDIT_NOTE: "recorded",
+  APPROVE_CREDIT_NOTE: "approved",
+  REJECT_CREDIT_NOTE: "rejected",
+  CANCEL_CREDIT_NOTE: "cancelled",
   LOGIN: "signed in",
   LOGOUT: "signed out",
 };
@@ -265,6 +296,7 @@ const shape = (log, resolved) => {
       name: actor,
       email: log.user?.email || null,
       role: log.user?.role || null,
+      designation: log.user?.designation || null,
     },
 
     target: label
@@ -309,7 +341,7 @@ exports.getAuditLogs = async (req, res) => {
     const [total, logs, moduleStats, actionStats] = await Promise.all([
       AuditLog.countDocuments(query),
       AuditLog.find(query)
-        .populate("user", "name email role")
+        .populate("user", "name email role designation")
         .sort({ createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit)
@@ -377,7 +409,7 @@ exports.getAuditTrail = async (req, res) => {
         .json({ message: `No ${cfg.noun} found for that reference` });
 
     const logs = await AuditLog.find({ targetId: doc._id })
-      .populate("user", "name email role")
+      .populate("user", "name email role designation")
       .sort({ createdAt: 1 })
       .lean();
 
@@ -396,7 +428,7 @@ exports.getAuditTrail = async (req, res) => {
       (r) => r.rejectedBy && actorIds.add(String(r.rejectedBy)),
     );
     const actors = await User.find({ _id: { $in: [...actorIds] } })
-      .select("name role")
+      .select("name role designation")
       .lean();
     const actorMap = Object.fromEntries(actors.map((u) => [String(u._id), u]));
 
@@ -416,7 +448,11 @@ exports.getAuditTrail = async (req, res) => {
         action: a.action === "rejected" ? "REJECT_INVOICE" : "APPROVE_INVOICE",
         module: type,
         tone: a.action === "rejected" ? "negative" : "positive",
-        actor: { name: u.name || "Unknown", role: u.role || null },
+        actor: {
+          name: u.name || "Unknown",
+          role: u.role || null,
+          designation: u.designation || null,
+        },
         target: { label: cfg.label(doc), noun: cfg.noun, id: doc._id },
         summary: `${u.name || "Unknown"} ${a.action === "rejected" ? "rejected" : "approved"} at ${a.stage}`,
         stage: a.stage,
@@ -460,7 +496,7 @@ exports.getAuditFilters = async (req, res) => {
     ]);
 
     const users = await User.find({ _id: { $in: userIds.filter(Boolean) } })
-      .select("name email role")
+      .select("name email role designation")
       .sort({ name: 1 })
       .lean();
 
@@ -483,7 +519,7 @@ exports.exportAuditExcel = async (req, res) => {
     const query = buildQuery(req);
 
     const logs = await AuditLog.find(query)
-      .populate("user", "name email role")
+      .populate("user", "name email role designation")
       .sort({ createdAt: -1 })
       .limit(10000)
       .lean();

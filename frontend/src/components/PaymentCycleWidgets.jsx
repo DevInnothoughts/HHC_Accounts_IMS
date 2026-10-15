@@ -1,10 +1,14 @@
 // ============================================================
 // FRONTEND: src/components/PaymentCycleWidgets.jsx — NEW FILE
 // ------------------------------------------------------------
-// Exports three things:
-//   usePaymentCycle()   — fetches the cycle from the API
-//   PaymentCycleModal   — the confirm popup before invoice submit
-//   PaymentCycleCard    — the dashboard card, all roles
+// Exports:
+//   usePaymentCycle()      — fetches the cycle from the API (+ reload)
+//   PaymentCycleModal      — the confirm popup before invoice submit
+//   ApprovalCycleNotice    — cycle block inside every approval popup
+//   PaymentCycleIndicator  — the dashboard ribbon / pill / tile
+//
+// Oct 2026: two payment WINDOWS (10–15 and 21–25), CH approval cut-offs
+// on the 7th and 17th (11:59 PM). All dates still come from the API.
 //
 // No date arithmetic here. The backend is the only place the rule
 // exists, so the popup and the dashboard cannot drift apart.
@@ -32,9 +36,14 @@ export function usePaymentCycle() {
   const [cycle, setCycle] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Bumped by reload(), so a popup opened after midnight never shows
+  // yesterday's cycle.
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setError("");
     api
       .get("/payment-cycle/current")
       .then((r) => {
@@ -49,10 +58,109 @@ export function usePaymentCycle() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [nonce]);
 
-  return { cycle, loading, error };
+  const reload = () => setNonce((n) => n + 1);
+  return { cycle, loading, error, reload };
 }
+
+// ── Approval popup block ───────────────────────────────────
+// Rendered inside EVERY invoice approval popup (Partner, Accounts,
+// Cluster Head). For the Cluster Head this is the final approval, so
+// the cycle is certain; for earlier approvers it depends on when the
+// Cluster Head signs off, so both outcomes are shown.
+export function ApprovalCycleNotice({ cycle, loading, isFinalApproval }) {
+  if (loading) {
+    return <div style={AN.box}>Checking payment cycle…</div>;
+  }
+  if (!cycle) {
+    return (
+      <div style={{ ...AN.box, ...AN.warnBox }}>
+        Payment cycle could not be loaded. It will be fixed on Cluster Head
+        approval.
+      </div>
+    );
+  }
+
+  if (isFinalApproval) {
+    return (
+      <div style={AN.box}>
+        <div style={AN.kicker}>PAYMENT CYCLE ON APPROVAL</div>
+        <div style={AN.row}>
+          <span style={{ ...AN.pill, background: C.teal }}>
+            {cycle.cycleLabel}
+          </span>
+          <span style={AN.date}>Payment {cycle.paymentWindowLabel}</span>
+        </div>
+        <div style={AN.sub}>
+          Approving now places this invoice in the{" "}
+          <strong>{cycle.cycleLabel}</strong>
+          {cycle.isNextMonth ? " of next month" : ""}. Cut-off for this cycle
+          was {cycle.cutoffDateTimeLabel}.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={AN.box}>
+      <div style={AN.kicker}>PAYMENT CYCLE</div>
+      <div style={AN.line}>
+        <span style={{ ...AN.mark, color: C.teal }}>✓</span>
+        <span>
+          Cluster Head approves by <strong>{cycle.cutoffDateTimeLabel}</strong>{" "}
+          → <strong>{cycle.cycleLabel}</strong> · {cycle.paymentWindowLabel}
+        </span>
+      </div>
+      <div style={AN.line}>
+        <span style={{ ...AN.mark, color: C.amber }}>→</span>
+        <span>
+          Approved after that → <strong>{cycle.nextCycle.cycleLabel}</strong> ·{" "}
+          {cycle.nextCycle.paymentWindowLabel}
+        </span>
+      </div>
+      {cycle.isCutoffToday && (
+        <div style={{ ...AN.sub, color: "#92400e", fontWeight: 600 }}>
+          ⚠ Cut-off is tonight — the Cluster Head must approve today for the{" "}
+          {cycle.cycleLabel}.
+        </div>
+      )}
+    </div>
+  );
+}
+
+const AN = {
+  box: {
+    background: C.tealBg,
+    border: `1px solid ${C.tealLine}`,
+    borderRadius: 10,
+    padding: "10px 12px",
+    marginBottom: 14,
+    fontSize: 12.5,
+    color: "#334155",
+    lineHeight: 1.55,
+  },
+  warnBox: { background: C.amberBg, borderColor: C.amberLine },
+  kicker: {
+    fontSize: 10.5,
+    fontWeight: 700,
+    color: C.teal,
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+  row: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  pill: {
+    color: "#fff",
+    padding: "3px 11px",
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 700,
+  },
+  date: { fontSize: 14, fontWeight: 600, color: C.ink },
+  sub: { fontSize: 11.5, color: C.muted, marginTop: 6 },
+  line: { display: "flex", gap: 8, alignItems: "flex-start", marginTop: 3 },
+  mark: { fontWeight: 700, flexShrink: 0 },
+};
 
 // ── Shared: collapsible terms ──────────────────────────────
 function TermsBlock({ terms, small }) {
@@ -148,8 +256,8 @@ export function PaymentCycleModal({
               <div style={M.branchHead}>
                 <span style={{ ...M.mark, color: C.teal }}>✓</span>
                 <span>
-                  If finally approved on or before{" "}
-                  <strong>{cycle.cutoffDateLabel}</strong>
+                  If finally approved by{" "}
+                  <strong>{cycle.cutoffDateTimeLabel}</strong>
                 </span>
               </div>
               <div style={M.branchBody}>
@@ -157,7 +265,7 @@ export function PaymentCycleModal({
                   {cycle.cycleLabel}
                 </span>
                 <span style={M.payDate}>
-                  Payment on {cycle.paymentDateLabel}
+                  Payment between {cycle.paymentWindowLabel}
                 </span>
               </div>
             </div>
@@ -174,7 +282,7 @@ export function PaymentCycleModal({
                 <span style={{ ...M.mark, color: C.amber }}>→</span>
                 <span>
                   If approval is completed after{" "}
-                  <strong>{cycle.cutoffDateLabel}</strong>
+                  <strong>{cycle.cutoffDateTimeLabel}</strong>
                 </span>
               </div>
               <div style={M.branchBody}>
@@ -182,7 +290,7 @@ export function PaymentCycleModal({
                   {cycle.nextCycle.cycleLabel}
                 </span>
                 <span style={M.payDate}>
-                  Payment on {cycle.nextCycle.paymentDateLabel}
+                  Payment between {cycle.nextCycle.paymentWindowLabel}
                 </span>
               </div>
             </div>
@@ -190,7 +298,8 @@ export function PaymentCycleModal({
             {cycle.isCutoffToday && (
               <p style={M.warn}>
                 ⚠ Today is the approval cut-off. This invoice will only make the{" "}
-                {cycle.cycleLabel} if every approval is completed today.
+                {cycle.cycleLabel} if every approval is completed by 11:59 PM
+                today.
               </p>
             )}
 
@@ -384,10 +493,10 @@ export function PaymentCycleIndicator({ variant = "ribbon" }) {
             </span>
             <div style={R.leftText}>
               <div style={R.payLine}>
-                Bank payment <strong>{cycle.paymentDateLabel}</strong>
+                Bank payment <strong>{cycle.paymentWindowLabel}</strong>
               </div>
               <div style={R.subLine}>
-                Approval cut-off {cycle.cutoffDateLabel}
+                CH approval cut-off {cycle.cutoffDateTimeLabel}
               </div>
             </div>
           </div>
@@ -435,7 +544,7 @@ export function PaymentCycleIndicator({ variant = "ribbon" }) {
           <span style={{ ...P.dot, background: accent }} />
           <span style={P.label}>{cycle.cycleLabel}</span>
           <span style={P.sep}>·</span>
-          <span style={P.date}>{cycle.paymentDateLabel}</span>
+          <span style={P.date}>{cycle.paymentWindowLabel}</span>
           <span style={P.caret}>{open ? "▴" : "▾"}</span>
         </button>
         {open && detail}
@@ -457,8 +566,8 @@ export function PaymentCycleIndicator({ variant = "ribbon" }) {
           <span style={ST.icon}>🗓️</span>
           <span style={{ ...ST.chip, color: accent }}>{cycle.cycleLabel}</span>
         </div>
-        <div style={ST.value}>{cycle.paymentDateLabel}</div>
-        <div style={ST.label}>Bank payment date</div>
+        <div style={ST.value}>{cycle.paymentWindowLabel}</div>
+        <div style={ST.label}>Bank payment window</div>
         <div style={{ ...ST.sub, color: accent }}>{daysText} to cut-off</div>
       </div>
       {open && detail}
@@ -486,21 +595,42 @@ function PaymentCycleDetail({ cycle, accent, onClose }) {
           </span>
         </div>
         <div style={DT.row}>
-          <span style={DT.k}>Approval cut-off</span>
-          <span style={DT.v}>{cycle.cutoffDateLabel}</span>
+          <span style={DT.k}>CH approval cut-off</span>
+          <span style={DT.v}>{cycle.cutoffDateTimeLabel}</span>
+        </div>
+        <div style={DT.row}>
+          <span style={DT.k}>Accounts processing</span>
+          <span style={DT.v}>{cycle.processingWindowLabel}</span>
         </div>
         <div style={DT.row}>
           <span style={DT.k}>Bank payment</span>
           <span style={{ ...DT.v, fontWeight: 700 }}>
-            {cycle.paymentDateLabel}
+            {cycle.paymentWindowLabel}
           </span>
         </div>
         <div style={DT.row}>
           <span style={DT.k}>Next cycle</span>
           <span style={DT.v}>
-            {cycle.nextCycle.cycleLabel} · {cycle.nextCycle.paymentDateLabel}
+            {cycle.nextCycle.cycleLabel} · {cycle.nextCycle.paymentWindowLabel}
           </span>
         </div>
+        {cycle.processingWindow?.active && (
+          <div
+            style={{
+              ...DT.row,
+              background: C.amberBg,
+              borderRadius: 6,
+              padding: "6px 8px",
+              marginTop: 4,
+            }}
+          >
+            <span style={{ ...DT.k, color: C.amber }}>🔒 Processing now</span>
+            <span style={DT.v}>
+              {cycle.processingWindow.cycleLabel} ·{" "}
+              {cycle.processingWindow.processingWindowLabel}
+            </span>
+          </div>
+        )}
 
         <p style={DT.note}>
           The cycle is fixed on the date an invoice receives final approval from

@@ -121,9 +121,16 @@ const startServer = async () => {
   );
   app.use("/api/invoices", require("./routes/invoices"));
   app.use("/api/payment-cycle", require("./routes/paymentCycle")); // ← ADD
+  // Fixed (recurring) monthly payments — router applies authenticate itself.
+  app.use("/api/fixed-payments", require("./routes/fixedPayments"));
+  // Credit notes against approved invoices — router applies authenticate.
+  app.use("/api/credit-notes", require("./routes/creditNotes"));
 
   const { initSLAScheduler } = require("./jobs/slaScheduler");
   await initSLAScheduler();
+
+  const { initFixedPaymentScheduler } = require("./jobs/fixedPaymentScheduler");
+  initFixedPaymentScheduler();
 
   app.use((err, req, res, next) => {
     console.error(err.stack);

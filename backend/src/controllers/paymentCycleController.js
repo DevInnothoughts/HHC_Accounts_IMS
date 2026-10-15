@@ -12,6 +12,12 @@ const {
 } = require("../utils/paymentCycle");
 const { CYCLES } = require("../config/paymentCycleConfig");
 
+const ordinal = (n) => {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};
+
 // GET /api/payment-cycle/current
 //   ?date=YYYY-MM-DD   optional, for previewing another date
 //
@@ -38,22 +44,15 @@ exports.getCurrentCycle = async (req, res) => {
       ...cycle,
       terms: PAYMENT_CYCLE_TERMS,
       // The rule table, so the UI can render it without hardcoding.
-      rules: [
-        {
-          cycleLabel: CYCLES.CYCLE_7.label,
-          cutoff: `${CYCLES.CYCLE_7.cutoffDay}th of every month`,
-          action:
-            "Accounts takes up all invoices finally approved by the Branch Partner and Cluster Head",
-          bankPayment: `${CYCLES.CYCLE_7.paymentDay}th`,
-        },
-        {
-          cycleLabel: CYCLES.CYCLE_21.label,
-          cutoff: `${CYCLES.CYCLE_21.cutoffDay}th of every month`,
-          action:
-            "Accounts takes up all invoices finally approved by the Branch Partner and Cluster Head",
-          bankPayment: `${CYCLES.CYCLE_21.paymentDay}st`,
-        },
-      ],
+      rules: [CYCLES.FIRST, CYCLES.SECOND].map((c) => ({
+        cycleKey: c.key,
+        cycleLabel: c.label,
+        cutoff: `Cluster Head approval by ${ordinal(c.approvalCutoffDay)}, 11:59 PM`,
+        processing: `${ordinal(c.processingStartDay)}–${ordinal(c.processingEndDay)}`,
+        bankPayment: `${ordinal(c.paymentStartDay)}–${ordinal(c.paymentEndDay)}`,
+        action:
+          "Accounts processes all invoices finally approved by the Cluster Head on or before the cut-off",
+      })),
     });
   } catch (err) {
     // Generic message: err.message leakage is being cleaned up

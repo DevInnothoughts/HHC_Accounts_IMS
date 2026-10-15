@@ -341,48 +341,6 @@ export default function Reports() {
                         </div>
                       );
                     })}
-
-                    <div style={{ ...S.chartTitle, marginTop: 20 }}>
-                      Priority Breakdown
-                    </div>
-                    {data?.priorityWise?.map((p) => {
-                      const total = data.priorityWise.reduce(
-                        (a, b) => a + b.count,
-                        0,
-                      );
-                      const pct =
-                        total > 0 ? ((p.count / total) * 100).toFixed(1) : 0;
-                      const color =
-                        {
-                          Normal: "#2563eb",
-                          Urgent: "#d97706",
-                          Critical: "#dc2626",
-                        }[p._id] || "#94a3b8";
-                      return (
-                        <div key={p._id} style={S.barItem}>
-                          <div
-                            style={{
-                              ...S.barLabel,
-                              display: "flex",
-                              justifyContent: "space-between",
-                            }}
-                          >
-                            <span>{p._id}</span>
-                            <span style={{ color }}>{fmtNum(p.count)}</span>
-                          </div>
-                          <div style={S.barTrack}>
-                            <div
-                              style={{
-                                ...S.barFill,
-                                width: `${pct}%`,
-                                background: color,
-                              }}
-                            />
-                          </div>
-                          <div style={S.barMeta}>{pct}%</div>
-                        </div>
-                      );
-                    })}
                   </div>
                 </div>
               </div>

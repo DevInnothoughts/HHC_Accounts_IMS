@@ -441,18 +441,6 @@ exports.getFinancialReport = async (req, res) => {
       },
     ]);
 
-    // Invoice: priority
-    const priorityWise = await InvoiceRequest.aggregate([
-      { $match: invoiceMatch },
-      {
-        $group: {
-          _id: "$priority",
-          count: { $sum: 1 },
-          totalAmount: { $sum: "$netPayable" },
-        },
-      },
-    ]);
-
     // Monthly trend — invoices
     const invoiceMonthlyTrend = await InvoiceRequest.aggregate([
       { $match: invoiceMatch },
@@ -554,7 +542,6 @@ exports.getFinancialReport = async (req, res) => {
       branchWiseInvoices,
       statusWise,
       expenseTypeWise,
-      priorityWise,
       invoiceMonthlyTrend,
       paymentMonthlyTrend,
       topVendors,

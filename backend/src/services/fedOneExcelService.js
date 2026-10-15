@@ -108,11 +108,12 @@ const resolveDebitAccount = (branch, preferredId) => {
 };
 
 // Same bank on both sides means an internal transfer, which clears
-// instantly and free. Otherwise the account's own RTGS threshold decides.
+// instantly and free. FedOne's code for that is "IFT" (Internal Fund
+// Transfer). Otherwise the account's own RTGS threshold decides.
 const resolveTransactionType = (amount, beneIfsc, debitAccount) => {
   const bene = String(beneIfsc || "").toUpperCase();
   const debit = String(debitAccount?.ifscCode || "").toUpperCase();
-  if (debit && bene.slice(0, 4) === debit.slice(0, 4)) return "FT";
+  if (debit && bene.slice(0, 4) === debit.slice(0, 4)) return "IFT";
   const threshold = Number(debitAccount?.rtgsThreshold ?? 200000);
   return toMoney(amount) >= threshold ? "RTGS" : "NEFT";
 };
