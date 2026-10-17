@@ -13,6 +13,8 @@ const InvoiceRequest = require("../models/InvoiceRequest");
 const PaymentProcessing = require("../models/PaymentProcessing");
 const Vendor = require("../models/Vendor");
 const VendorMaster = require("../models/VendorMaster");
+const CreditNote = require("../models/CreditNote");
+const FixedPayment = require("../models/FixedPayment");
 const { vendorIdentityStages } = require("../utils/vendorIdentity");
 
 // Masters that are not approved yet. A branch vendor waiting on one of
@@ -166,26 +168,25 @@ exports.getDashboardStats = async (req, res) => {
         rejectedVendors,
         masterTotal,
         masterPending,
-      ] =
-        await Promise.all([
-          Vendor.countDocuments(branchFilter),
-          Vendor.countDocuments({
-            ...branchFilter,
-            approvalStatus: "pending_approval",
-            vendorMaster: { $nin: waitingOnMaster },
-          }),
-          Vendor.countDocuments({
-            ...branchFilter,
-            approvalStatus: "approved",
-          }),
-          Vendor.countDocuments({
-            ...branchFilter,
-            approvalStatus: "rejected",
-          }),
-          // Masters are group-wide: one per real vendor.
-          VendorMaster.countDocuments({}),
-          VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
-        ]);
+      ] = await Promise.all([
+        Vendor.countDocuments(branchFilter),
+        Vendor.countDocuments({
+          ...branchFilter,
+          approvalStatus: "pending_approval",
+          vendorMaster: { $nin: waitingOnMaster },
+        }),
+        Vendor.countDocuments({
+          ...branchFilter,
+          approvalStatus: "approved",
+        }),
+        Vendor.countDocuments({
+          ...branchFilter,
+          approvalStatus: "rejected",
+        }),
+        // Masters are group-wide: one per real vendor.
+        VendorMaster.countDocuments({}),
+        VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
+      ]);
       vendorStats = {
         // Branch vendor records (one per vendor per branch)
         total: totalVendors,
@@ -260,22 +261,23 @@ async function getPendingActionsForRole(role, user) {
   // AFTER
   if (role === "accounts") {
     const waitingOnMaster = await unapprovedMasterIds();
-    const [invoiceApprove, paymentApprove, vendorApprove, masterApprove] = await Promise.all([
-      InvoiceRequest.countDocuments({
-        ...branchFilter,
-        status: "Partner Approved",
-      }),
-      PaymentProcessing.countDocuments({
-        ...branchFilter,
-        status: "Payment Raised",
-      }),
-      Vendor.countDocuments({
-        ...branchFilter,
-        approvalStatus: "pending_approval",
-        vendorMaster: { $nin: waitingOnMaster },
-      }),
-      VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
-    ]);
+    const [invoiceApprove, paymentApprove, vendorApprove, masterApprove] =
+      await Promise.all([
+        InvoiceRequest.countDocuments({
+          ...branchFilter,
+          status: "Partner Approved",
+        }),
+        PaymentProcessing.countDocuments({
+          ...branchFilter,
+          status: "Payment Raised",
+        }),
+        Vendor.countDocuments({
+          ...branchFilter,
+          approvalStatus: "pending_approval",
+          vendorMaster: { $nin: waitingOnMaster },
+        }),
+        VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
+      ]);
     if (invoiceApprove > 0)
       actions.push({
         label: "Invoices awaiting your approval",
@@ -303,6 +305,38 @@ async function getPendingActionsForRole(role, user) {
         count: vendorApprove,
         path: "/vendors?approvalStatus=pending_approval",
         color: "#d97706",
+      });
+  }
+
+  // Credit notes waiting for approval — Accounts (own branches) and Super
+  // Admin. Excludes ones the user recorded, since they cannot approve
+  // their own.
+  if (role === "accounts" || role === "super_admin") {
+    const creditNotes = await CreditNote.countDocuments({
+      ...branchFilter,
+      status: "pending_approval",
+      createdBy: { $ne: user._id },
+    });
+    if (creditNotes > 0)
+      actions.push({
+        label: "Credit notes awaiting your approval",
+        count: creditNotes,
+        path: "/credit-notes",
+        color: "#0f766e",
+      });
+  }
+
+  // Fixed monthly payments waiting for the one-time Super Admin approval.
+  if (role === "super_admin") {
+    const fixedPending = await FixedPayment.countDocuments({
+      status: "pending_approval",
+    });
+    if (fixedPending > 0)
+      actions.push({
+        label: "Fixed payments awaiting your approval",
+        count: fixedPending,
+        path: "/fixed-payments",
+        color: "#7c3aed",
       });
   }
 
