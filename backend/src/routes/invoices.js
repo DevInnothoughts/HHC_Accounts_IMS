@@ -53,7 +53,9 @@ router.get(
       if (branchId && !mongoose.isValidObjectId(branchId))
         return res.status(400).json({ message: "Invalid branch" });
       if (branchId && !canSeeBranchInvoices(req, branchId))
-        return res.status(403).json({ message: "You do not have access to this branch" });
+        return res
+          .status(403)
+          .json({ message: "You do not have access to this branch" });
       const branchIds = branchId
         ? [branchId]
         : invoiceScoped(req)
@@ -69,6 +71,14 @@ router.get(
       res.status(500).json({ message: err.message });
     }
   },
+);
+
+// Bulk approve (Oct 2026) — Cluster Head only (Department Heads share the
+// cluster_head role). Static path, so it sits above "/:id".
+router.post(
+  "/bulk-approve",
+  roleGuard(ROLES.CLUSTER_HEAD),
+  ctrl.bulkApproveInvoices,
 );
 
 router.get("/", ctrl.getInvoices);
@@ -113,7 +123,9 @@ router.post("/check-duplicate", async (req, res) => {
         .json({ message: "branchId, vendorId and invoiceNumber are required" });
     }
     if (!canSeeBranchInvoices(req, branchId)) {
-      return res.status(403).json({ message: "You do not have access to this branch" });
+      return res
+        .status(403)
+        .json({ message: "You do not have access to this branch" });
     }
     const result = await checkDuplicateInvoice(
       branchId,
@@ -127,6 +139,5 @@ router.post("/check-duplicate", async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 });
-
 
 module.exports = router;

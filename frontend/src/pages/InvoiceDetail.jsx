@@ -21,7 +21,6 @@ const STATUS_STYLES = {
   Rejected: { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
-
 export default function InvoiceDetail() {
   const { id } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -275,7 +274,9 @@ export default function InvoiceDetail() {
               </button>
             )}
             {invoice.status === "Cluster Head Approved" &&
-              ["branch_user", "accounts", "super_admin"].includes(user?.role) && (
+              ["branch_user", "accounts", "super_admin"].includes(
+                user?.role,
+              ) && (
                 <button
                   style={{ ...S.paymentBtn, background: "#0f766e" }}
                   onClick={() => setCreditNoteSignal((n) => n + 1)}
@@ -865,6 +866,7 @@ export default function InvoiceDetail() {
                 existingDocs={invoice.attachments || []}
                 onUploadSuccess={fetchInvoice}
                 canUpload={user?.role === "branch_user"}
+                canDelete={["Draft", "Rejected"].includes(invoice.status)}
               />
             </>
           )}

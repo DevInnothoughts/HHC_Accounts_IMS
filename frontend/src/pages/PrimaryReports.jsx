@@ -19,6 +19,9 @@ import SubtypeReport from "./SubtypeReport.jsx";
 import VendorReport from "./VendorReport.jsx";
 import TdsReport from "./TdsReport.jsx";
 import { downloadExcel, filterMeta } from "../utils/exportExcel";
+import BranchMultiSelect, {
+  branchNamesOf,
+} from "../components/BranchMultiSelect.jsx";
 
 const C = {
   primary: "#1a3c6e",
@@ -95,6 +98,9 @@ export default function PrimaryReports() {
   const [filters, setFilters] = useState(BLANK);
 
   const [options, setOptions] = useState({ categories: [], branches: [] });
+  // Where the Subtype / Vendor / TDS tabs render their own filter bar, so
+  // it sits above the tab bar like the shared filters do.
+  const [filterSlot, setFilterSlot] = useState(null);
   const [data, setData] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -158,9 +164,12 @@ export default function PrimaryReports() {
   const dirty = JSON.stringify(draft) !== JSON.stringify(filters);
 
   const current = data[tab];
-  const branchName =
-    options.branches.find((b) => String(b._id) === filters.branch)?.name ||
-    null;
+  // Branch filter is multi-select: filters.branch = "id1,id2" ("" = all)
+  const branchOpts = options.branches.map((b) => ({
+    value: b._id,
+    label: b.name,
+  }));
+  const branchName = branchNamesOf(branchOpts, filters.branch);
   const metaFilters = { ...filters, branchName };
 
   return (
@@ -200,18 +209,12 @@ export default function PrimaryReports() {
               />
             </Field>
             <Field label="Branch">
-              <select
+              <BranchMultiSelect
                 style={S.input}
+                options={branchOpts}
                 value={draft.branch}
-                onChange={set("branch")}
-              >
-                <option value="">All branches</option>
-                {options.branches.map((b) => (
-                  <option key={b._id} value={b._id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setDraft((d) => ({ ...d, branch: v }))}
+              />
             </Field>
             <Field label="Expense type">
               <select
@@ -268,6 +271,11 @@ export default function PrimaryReports() {
           </div>
         )}
 
+        {/* Subtype / Vendor / TDS filters are portalled in here */}
+        {SELF_CONTAINED.includes(tab) && (
+          <div ref={setFilterSlot} style={S.filterSlot} />
+        )}
+
         <div style={S.tabs}>
           {TABS.map(([k, l]) => (
             <button
@@ -286,11 +294,13 @@ export default function PrimaryReports() {
           <TdsReport
             branches={options.branches}
             categories={options.categories}
+            filterSlot={filterSlot}
           />
         ) : tab === "vendor" ? (
           <VendorReport
             branches={options.branches}
             categories={options.categories}
+            filterSlot={filterSlot}
           />
         ) : tab === "subtype" ? (
           <SubtypeReport
@@ -298,6 +308,7 @@ export default function PrimaryReports() {
               branchId: b._id,
               branchName: b.name,
             }))}
+            filterSlot={filterSlot}
           />
         ) : loading && !current ? (
           <div style={S.loading}>Loading…</div>
@@ -1659,6 +1670,13 @@ const S = {
   },
   filterHint: { fontSize: 12, color: C.warn, alignSelf: "center" },
   tabs: { display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" },
+  // Same 16px rhythm the tabs used inside their own column layout
+  filterSlot: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+    marginBottom: 16,
+  },
   tab: {
     padding: "9px 16px",
     border: `1px solid ${C.line}`,

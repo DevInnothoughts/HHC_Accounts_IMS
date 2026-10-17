@@ -49,6 +49,9 @@ export default function FileUpload({
   onUploadSuccess,
   requiredTypes = null,
   canUpload = true,
+  // false = existing files can't be replaced or deleted (invoice already
+  // submitted). New document types can still be added if canUpload.
+  canDelete = true,
   readOnlyMessage = "Upload controls are only available to the branch user while editing this request.",
 }) {
   const [selectedDocType, setSelectedDocType] = useState("");
@@ -65,8 +68,9 @@ export default function FileUpload({
   const isRequired = (dt) =>
     requiredTypes ? requiredTypes.includes(dt.value) : dt.required;
 
-  const uploadEndpoint = (UPLOAD_ENDPOINTS[entityType] ||
-    UPLOAD_ENDPOINTS.payment)(entityId);
+  const uploadEndpoint = (
+    UPLOAD_ENDPOINTS[entityType] || UPLOAD_ENDPOINTS.payment
+  )(entityId);
 
   // ── Core upload function ─────────────────────────────
   const doUpload = async (file, docType) => {
@@ -147,8 +151,9 @@ export default function FileUpload({
   const handleDelete = async (doc) => {
     if (!window.confirm(`Delete "${doc.name}"? This cannot be undone.`)) return;
 
-    const deleteEndpoint = (DELETE_ENDPOINTS[entityType] ||
-      DELETE_ENDPOINTS.payment)(entityId, doc);
+    const deleteEndpoint = (
+      DELETE_ENDPOINTS[entityType] || DELETE_ENDPOINTS.payment
+    )(entityId, doc);
 
     setDeletingType(doc.type);
     try {
@@ -168,9 +173,7 @@ export default function FileUpload({
     <div style={S.wrapper}>
       <div style={S.title}>📎 Document Management</div>
 
-      {!canUpload && (
-        <div style={S.readOnlyBanner}>{readOnlyMessage}</div>
-      )}
+      {!canUpload && <div style={S.readOnlyBanner}>{readOnlyMessage}</div>}
 
       {error && (
         <div style={S.errorBanner}>
@@ -240,7 +243,15 @@ export default function FileUpload({
                     >
                       View
                     </a>
-                    {canUpload && (
+                    {canUpload && !canDelete && (
+                      <span
+                        title="Attachments are locked after submission. The approver can reject the invoice back if a document needs to change."
+                        style={{ fontSize: 11, color: "#94a3b8" }}
+                      >
+                        🔒 Locked
+                      </span>
+                    )}
+                    {canUpload && canDelete && (
                       <>
                         <button
                           style={S.replaceBtn}

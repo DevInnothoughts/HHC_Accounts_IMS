@@ -24,7 +24,15 @@ const {
   INVOICE_STATUS,
   ROLES,
   INVOICE_WORKFLOW,
+  INVOICE_REQUIRED_DOC_TYPES,
 } = require("../config/constants");
+
+const DOC_LABEL = {
+  invoice: "Invoice",
+  quotation: "Quotation",
+  po: "PO",
+  challan: "Challan",
+};
 const { logAction } = require("../services/auditService");
 const { sendNotificationEmail } = require("../services/emailService");
 const {
@@ -164,9 +172,9 @@ exports.createInvoice = async (req, res) => {
     //    assigned branches. (Was never checked; the vendor gate only proved
     //    the vendor belonged to the branch, not the user.)
     if (!branch || !access.canAccessBranch(req, branch)) {
-      return res
-        .status(403)
-        .json({ message: "You can only raise invoices for your assigned branches" });
+      return res.status(403).json({
+        message: "You can only raise invoices for your assigned branches",
+      });
     }
 
     const gate = await vendorGate(vendor, branch);
@@ -289,6 +297,21 @@ exports.submitInvoice = async (req, res) => {
       });
     }
 
+    // ✅ Required attachments (Oct 2026). Was only checked in the browser,
+    //    so a stale tab, an old cached app or a direct API call could
+    //    submit an invoice with no Invoice / Quotation attached.
+    const missingDocs = INVOICE_REQUIRED_DOC_TYPES.filter(
+      (t) => !(invoice.attachments || []).some((a) => a.type === t && a.url),
+    );
+    if (missingDocs.length) {
+      return res.status(400).json({
+        message: `Upload the required documents before submitting: ${missingDocs
+          .map((t) => DOC_LABEL[t] || t)
+          .join(", ")}`,
+        missingDocs,
+      });
+    }
+
     // ── Payment cycle (projected) ──────────────────────────
     // Indicative only. The real cycle is fixed when the Cluster Head
     // gives final approval, so this is recorded purely so we can
@@ -371,14 +394,42 @@ exports.submitInvoice = async (req, res) => {
   }
 };
 
-exports.approveInvoice = async (req, res) => {
+// ── Approve ONE invoice ─────────────────────────────────────
+// Shared by approveInvoice (single) and bulkApproveInvoices (Cluster Head
+// bulk), so both paths run the identical workflow: turn check, TDS, payment
+// cycle, payment record, emails, SLA and audit log. Never throws; returns
+// { status, body } for the caller to send or collect.
+const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
   try {
-    const { remarks, tdsPercentage } = req.body;
+    const { remarks, tdsPercentage, auditAction = "APPROVE_INVOICE" } = opts;
 
-    const invoice = await InvoiceRequest.findById(req.params.id).populate(
+    if (!mongoose.isValidObjectId(invoiceId))
+      return { status: 400, body: { message: "Invalid invoice id" } };
+
+    const invoice = await InvoiceRequest.findById(invoiceId).populate(
       "branch vendor createdBy",
     );
-    if (!invoice) return res.status(404).json({ message: "Invoice not found" });
+    if (!invoice)
+      return { status: 404, body: { message: "Invoice not found" } };
+
+    // Branch scope — the same rule getInvoiceById applies. Approvals were
+    // not checking it, so a branch-bound approver could act on another
+    // branch's invoice by id.
+    const branchScopedApprovers = [
+      ROLES.BRANCH_PARTNER,
+      ROLES.ACCOUNTS,
+      ROLES.CLUSTER_HEAD,
+    ];
+    if (branchScopedApprovers.includes(req.user.role)) {
+      const allowed = (req.user.branches || []).map((b) => String(b?._id || b));
+      const recordBranch = String(invoice.branch?._id || invoice.branch);
+      if (!allowed.includes(recordBranch)) {
+        return {
+          status: 403,
+          body: { message: "You do not have access to this invoice's branch" },
+        };
+      }
+    }
 
     const previousStatus = invoice.status;
 
@@ -395,11 +446,14 @@ exports.approveInvoice = async (req, res) => {
 
     if (!normalTurn && !partnerSkipped) {
       const blockingStep = getWorkflowStep(invoice.status);
-      return res.status(403).json({
-        message: blockingStep
-          ? `Not your turn. Awaiting: ${blockingStep.actingRole.replace(/_/g, " ")}`
-          : `Invoice status "${invoice.status}" does not require approval`,
-      });
+      return {
+        status: 403,
+        body: {
+          message: blockingStep
+            ? `Not your turn. Awaiting: ${blockingStep.actingRole.replace(/_/g, " ")}`
+            : `Invoice status "${invoice.status}" does not require approval`,
+        },
+      };
     }
 
     // ✅ For partner-skipped invoices, use accounts approval step
@@ -412,9 +466,12 @@ exports.approveInvoice = async (req, res) => {
       : getWorkflowStep(invoice.status);
 
     if (!step) {
-      return res.status(400).json({
-        message: `Invoice status "${invoice.status}" has no approval step`,
-      });
+      return {
+        status: 400,
+        body: {
+          message: `Invoice status "${invoice.status}" has no approval step`,
+        },
+      };
     }
 
     const isFinalApproval = step.nextStatus === INVOICE_STATUS.CLUSTER_APPROVED;
@@ -426,15 +483,17 @@ exports.approveInvoice = async (req, res) => {
         tdsPercentage === null ||
         tdsPercentage === ""
       ) {
-        return res.status(400).json({
-          message: "TDS percentage is required for accounts approval",
-        });
+        return {
+          status: 400,
+          body: { message: "TDS percentage is required for accounts approval" },
+        };
       }
       const tds = parseFloat(tdsPercentage);
       if (isNaN(tds) || tds < 0 || tds > 100) {
-        return res.status(400).json({
-          message: "TDS percentage must be between 0 and 100",
-        });
+        return {
+          status: 400,
+          body: { message: "TDS percentage must be between 0 and 100" },
+        };
       }
       // Recalculate TDS amount and net payable from the base amount.
       // Recomputed, never decremented, so a repeat pass cannot compound it.
@@ -617,7 +676,7 @@ exports.approveInvoice = async (req, res) => {
     try {
       await logAction({
         userId: req.user._id,
-        action: "APPROVE_INVOICE",
+        action: auditAction,
         module: "Invoice",
         targetDoc: invoice,
         statusFrom: previousStatus,
@@ -635,10 +694,105 @@ exports.approveInvoice = async (req, res) => {
       console.error("Approval audit log failed:", auditErr);
     }
 
-    res.json(invoice);
+    return { status: 200, body: invoice };
   } catch (err) {
     console.error("approveInvoice error:", err);
-    res.status(500).json({ message: "Approval failed. Please try again." });
+    return {
+      status: 500,
+      body: { message: "Approval failed. Please try again." },
+    };
+  }
+};
+
+exports.approveInvoice = async (req, res) => {
+  const { remarks, tdsPercentage } = req.body || {};
+  const result = await approveSingleInvoice(req.params.id, req, {
+    remarks,
+    tdsPercentage,
+  });
+  res.status(result.status).json(result.body);
+};
+
+// ── Bulk approve — Cluster Head only (Oct 2026) ─────────────
+// The Cluster Head ticks invoices on the list, reviews a summary popup and
+// confirms. Each invoice goes through approveSingleInvoice one at a time,
+// so every rule and side effect of a single approval applies unchanged.
+// One failure does not stop the rest; the response lists both outcomes.
+const BULK_APPROVE_MAX = 50;
+
+exports.bulkApproveInvoices = async (req, res) => {
+  try {
+    const { invoiceIds, remarks } = req.body || {};
+    if (!Array.isArray(invoiceIds) || invoiceIds.length === 0) {
+      return res
+        .status(400)
+        .json({ message: "Select at least one invoice to approve" });
+    }
+    const ids = [...new Set(invoiceIds.map(String))];
+    if (ids.length > BULK_APPROVE_MAX) {
+      return res.status(400).json({
+        message: `You can bulk approve up to ${BULK_APPROVE_MAX} invoices at a time`,
+      });
+    }
+    const badId = ids.find((id) => !mongoose.isValidObjectId(id));
+    if (badId) {
+      return res.status(400).json({ message: `Invalid invoice id: ${badId}` });
+    }
+
+    const trimmedRemarks = (remarks || "").trim();
+    const approved = [];
+    const failed = [];
+
+    // Sequential on purpose: each approval sends emails and writes a
+    // payment record; running them in parallel would hammer SMTP and make
+    // failures harder to read.
+    for (const id of ids) {
+      const result = await approveSingleInvoice(id, req, {
+        remarks: trimmedRemarks
+          ? `Bulk approval — ${trimmedRemarks}`
+          : "Bulk approval",
+        auditAction: "BULK_APPROVE_INVOICE",
+      });
+      if (result.status === 200) {
+        const inv = result.body;
+        approved.push({
+          _id: inv._id,
+          requestId: inv.requestId,
+          netPayable: inv.netPayable,
+          branch: inv.branch?.name || null,
+          vendor: inv.vendor?.vendorName || null,
+          paymentCycle: inv.paymentCycle?.assigned || null,
+        });
+      } else {
+        const doc = await InvoiceRequest.findById(id)
+          .select("requestId")
+          .lean()
+          .catch(() => null);
+        failed.push({
+          _id: id,
+          requestId: doc?.requestId || null,
+          message: result.body?.message || "Approval failed",
+        });
+      }
+    }
+
+    const totalApprovedAmount = +approved
+      .reduce((s, a) => s + (Number(a.netPayable) || 0), 0)
+      .toFixed(2);
+
+    res.json({
+      requested: ids.length,
+      approvedCount: approved.length,
+      failedCount: failed.length,
+      totalApprovedAmount,
+      approved,
+      failed,
+    });
+  } catch (err) {
+    console.error("bulkApproveInvoices error:", err);
+    res
+      .status(500)
+      .json({ message: "Bulk approval failed. Please try again." });
   }
 };
 
@@ -782,6 +936,11 @@ exports.updateInvoice = async (req, res) => {
     delete updateData.tdsPercentage; // ✅ TDS only set during approval, not edit
     delete updateData.tdsAmount; // ✅ recalculated during accounts approval
     delete updateData.priority; // removed from the form; existing value kept
+    // Attachments change only through the upload endpoints, which enforce
+    // the status lock and write the audit trail. An edit must never be able
+    // to replace or empty the list.
+    delete updateData.attachments;
+    delete updateData.paymentRequest;
 
     if (Array.isArray(updateData.items) && updateData.items.length > 0) {
       const totals = computeInvoiceTotals(updateData.items);
@@ -805,9 +964,9 @@ exports.updateInvoice = async (req, res) => {
     const vendorChanged = String(newVendor) !== String(invoice.vendor);
     const branchChanged = String(newBranch) !== String(invoice.branch);
     if (branchChanged && !access.canAccessBranch(req, newBranch)) {
-      return res
-        .status(403)
-        .json({ message: "You can only move invoices to your assigned branches" });
+      return res.status(403).json({
+        message: "You can only move invoices to your assigned branches",
+      });
     }
     if (vendorChanged || branchChanged) {
       const gate = await vendorGate(newVendor, newBranch);

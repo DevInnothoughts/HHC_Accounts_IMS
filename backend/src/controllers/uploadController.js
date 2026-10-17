@@ -20,7 +20,25 @@ const { logAction } = require("../services/auditService");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const Vendor = require("../models/Vendor");
 const VendorMaster = require("../models/VendorMaster");
-const { VENDOR_MASTER } = require("../config/constants");
+const {
+  VENDOR_MASTER,
+  ROLES,
+  INVOICE_ATTACHMENT_EDITABLE_STATUSES,
+} = require("../config/constants");
+
+// Invoice attachments are visible to these roles only for their assigned
+// branches — the same scope getInvoiceById applies.
+const INVOICE_SCOPED_ROLES = [
+  ROLES.BRANCH_USER,
+  ROLES.BRANCH_PARTNER,
+  ROLES.ACCOUNTS,
+  ROLES.CLUSTER_HEAD,
+];
+const canTouchInvoice = (req, invoice) =>
+  !INVOICE_SCOPED_ROLES.includes(req.user?.role) ||
+  access
+    .userBranchIds(req)
+    .includes(String(invoice.branch?._id || invoice.branch));
 const access = require("../utils/vendorAccess");
 const {
   ALLOWED_DOC_TYPES,
@@ -57,6 +75,11 @@ exports.uploadPaymentAttachment = async (req, res) => {
     const invoice = await InvoiceRequest.findById(id);
     if (!invoice)
       return res.status(404).json({ message: "Invoice request not found" });
+    // ✅ Branch scope (was never checked)
+    if (!canTouchInvoice(req, invoice))
+      return res
+        .status(403)
+        .json({ message: "You do not have access to this invoice's branch" });
 
     const { key, url, fileName } = await uploadFile(
       req.file.buffer,
@@ -79,7 +102,8 @@ exports.uploadPaymentAttachment = async (req, res) => {
       userId: req.user._id,
       action: "UPLOAD_INVOICE_ATTACHMENT",
       module: "Invoice",
-      targetId: invoice._id,
+      targetDoc: invoice,
+      newValue: { attachment: { name: fileName, type: docType, key, url } },
       req,
     });
     res.json({
@@ -92,6 +116,16 @@ exports.uploadPaymentAttachment = async (req, res) => {
   }
 };
 
+// Oct 2026 — attachments are locked once an invoice is submitted.
+// Before, any logged-in user could delete any invoice's attachment at any
+// stage, with no audit entry: a branch could upload the Invoice and
+// Quotation, submit, and then remove them.
+//   • only while the invoice is Draft or Rejected (super_admin excepted)
+//   • only the branch user who raised it, or Accounts / Super Admin, and
+//     only within the caller's branches
+//   • every removal is audit-logged with the file's storage key
+//   • the stored file itself is kept (records are never destroyed), so a
+//     removal can always be traced and the file recovered
 exports.deletePaymentAttachment = async (req, res) => {
   try {
     const { id, attachmentId } = req.params;
@@ -99,15 +133,60 @@ exports.deletePaymentAttachment = async (req, res) => {
     const invoice = await InvoiceRequest.findById(id);
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
 
+    if (!canTouchInvoice(req, invoice))
+      return res
+        .status(403)
+        .json({ message: "You do not have access to this invoice's branch" });
+
+    const role = req.user.role;
+    const isOwnerBranchUser =
+      role === ROLES.BRANCH_USER &&
+      String(invoice.createdBy) === String(req.user._id);
+    if (
+      !isOwnerBranchUser &&
+      ![ROLES.ACCOUNTS, ROLES.SUPER_ADMIN].includes(role)
+    )
+      return res.status(403).json({
+        message: "You are not allowed to remove attachments from this invoice",
+      });
+
+    if (
+      role !== ROLES.SUPER_ADMIN &&
+      !INVOICE_ATTACHMENT_EDITABLE_STATUSES.includes(invoice.status)
+    )
+      return res.status(403).json({
+        message: `Attachments are locked once an invoice is submitted (status: ${invoice.status}). Ask the approver to reject it back if a document needs to change.`,
+      });
+
     const attachment = invoice.attachments.id(attachmentId);
     if (!attachment)
       return res.status(404).json({ message: "Attachment not found" });
 
-    if (attachment.key) await deleteFile(attachment.key).catch(console.warn);
+    const removed = {
+      name: attachment.name,
+      type: attachment.type,
+      key: attachment.key,
+      url: attachment.url,
+      uploadedAt: attachment.uploadedAt,
+    };
     invoice.attachments.pull(attachmentId);
     await invoice.save();
 
-    res.json({ message: "Attachment deleted" });
+    try {
+      await logAction({
+        userId: req.user._id,
+        action: "DELETE_INVOICE_ATTACHMENT",
+        module: "Invoice",
+        targetDoc: invoice,
+        oldValue: { attachment: removed },
+        reason: `Removed ${removed.type} "${removed.name}" at status ${invoice.status}`,
+        req,
+      });
+    } catch (auditErr) {
+      console.error("Attachment delete audit log failed:", auditErr);
+    }
+
+    res.json({ message: "Attachment removed" });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

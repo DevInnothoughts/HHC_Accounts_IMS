@@ -127,6 +127,13 @@ router.get(
 
 // ── TDS (accounts) ─────────────────────────────────────────
 // Same roles and branch scoping as the other primary reports.
+// Static path above "/tds" for readability; distinct paths, no clash.
+// Customised "TDS WORKING" sheet in the Accounts team's own format.
+router.get(
+  "/tds/working-excel",
+  roleGuard(...PRIMARY_REPORT_ROLES),
+  require("../controllers/tdsReportController").exportTdsWorkingExcel,
+);
 router.get(
   "/tds",
   roleGuard(...PRIMARY_REPORT_ROLES),

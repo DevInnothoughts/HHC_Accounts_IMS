@@ -23,7 +23,6 @@ const STATUS_STYLES = {
   Rejected: { bg: "#fef2f2", color: "#dc2626", icon: "❌" },
 };
 
-
 const STATUSES = [
   "",
   "Draft",
@@ -76,6 +75,16 @@ export default function InvoiceRequests() {
     loading: cycleLoading,
     reload: reloadCycle,
   } = usePaymentCycle();
+  // ── Bulk approve (Cluster Head only) ──────────────────────
+  // Selection is kept by id with the row data, so the summary popup can
+  // list invoices even after the user pages or filters away from them.
+  const isClusterHead = user?.role === ROLES.CLUSTER_HEAD;
+  const [selected, setSelected] = useState({}); // { [id]: invoice }
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkRemarks, setBulkRemarks] = useState("");
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkError, setBulkError] = useState("");
+  const [bulkResult, setBulkResult] = useState(null);
   const [search, setSearch] = useState(savedState.search || "");
   const [debouncedSearch, setDebouncedSearch] = useState(
     savedState.search || "",
@@ -133,6 +142,81 @@ export default function InvoiceRequests() {
       setApproveError(err.response?.data?.message || "Approval failed");
     } finally {
       setActionLoading("");
+    }
+  };
+
+  // Only invoices waiting at the Cluster Head stage can be bulk approved.
+  const isBulkEligible = (inv) =>
+    isClusterHead && inv?.status === "Accounts Approved";
+  const selectedList = Object.values(selected);
+  const selectedCount = selectedList.length;
+  const selectedTotal = selectedList.reduce(
+    (s, inv) => s + (Number(inv.netPayable) || 0),
+    0,
+  );
+  const eligibleOnPage = invoices.filter(isBulkEligible);
+  const allPageSelected =
+    eligibleOnPage.length > 0 &&
+    eligibleOnPage.every((inv) => selected[inv._id]);
+
+  const toggleSelect = (inv) =>
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[inv._id]) delete next[inv._id];
+      else if (Object.keys(next).length < BULK_MAX) next[inv._id] = inv;
+      return next;
+    });
+
+  const toggleSelectPage = () =>
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (allPageSelected) {
+        eligibleOnPage.forEach((inv) => delete next[inv._id]);
+      } else {
+        for (const inv of eligibleOnPage) {
+          if (Object.keys(next).length >= BULK_MAX) break;
+          next[inv._id] = inv;
+        }
+      }
+      return next;
+    });
+
+  const openBulkApprove = () => {
+    if (!selectedCount) return;
+    reloadCycle();
+    setBulkRemarks("");
+    setBulkError("");
+    setBulkResult(null);
+    setBulkOpen(true);
+  };
+
+  const closeBulk = () => {
+    if (bulkLoading) return;
+    setBulkOpen(false);
+    setBulkResult(null);
+  };
+
+  const confirmBulkApprove = async () => {
+    setBulkLoading(true);
+    setBulkError("");
+    try {
+      const { data } = await api.post("/invoices/bulk-approve", {
+        invoiceIds: selectedList.map((inv) => inv._id),
+        remarks: bulkRemarks.trim(),
+      });
+      setBulkResult(data);
+      // Approved invoices leave the selection; failed ones stay ticked so
+      // the Cluster Head can see and retry or open them.
+      setSelected((prev) => {
+        const next = { ...prev };
+        (data.approved || []).forEach((a) => delete next[a._id]);
+        return next;
+      });
+      fetchInvoices();
+    } catch (err) {
+      setBulkError(err.response?.data?.message || "Bulk approval failed");
+    } finally {
+      setBulkLoading(false);
     }
   };
 
@@ -277,6 +361,7 @@ export default function InvoiceRequests() {
             onClick={() => {
               setSearch("");
               setDebouncedSearch("");
+              setSelected({});
               setFilters({
                 status: "",
                 priority: "",
@@ -290,6 +375,28 @@ export default function InvoiceRequests() {
             Reset
           </button>
         </div>
+
+        {/* Bulk approve bar — Cluster Head only */}
+        {isClusterHead && selectedCount > 0 && (
+          <div style={BA.bar}>
+            <div style={BA.barText}>
+              <strong>{selectedCount}</strong> invoice
+              {selectedCount > 1 ? "s" : ""} selected ·{" "}
+              <strong>{inr(selectedTotal)}</strong>
+              {selectedCount >= BULK_MAX && (
+                <span style={BA.barHint}> (max {BULK_MAX} per batch)</span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button style={BA.clearBtn} onClick={() => setSelected({})}>
+                Clear
+              </button>
+              <button style={BA.approveBtn} onClick={openBulkApprove}>
+                ✓ Approve Selected
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Table */}
         <div style={S.tableCard}>
@@ -311,6 +418,18 @@ export default function InvoiceRequests() {
             <table style={S.table}>
               <thead>
                 <tr style={S.thead}>
+                  {isClusterHead && (
+                    <th style={{ ...S.th, width: 36 }}>
+                      <input
+                        type="checkbox"
+                        title="Select all invoices awaiting your approval on this page"
+                        style={BA.checkbox}
+                        checked={allPageSelected}
+                        disabled={eligibleOnPage.length === 0}
+                        onChange={toggleSelectPage}
+                      />
+                    </th>
+                  )}
                   {[
                     "Invoice ID",
                     "Branch",
@@ -337,6 +456,24 @@ export default function InvoiceRequests() {
                       style={S.tr}
                       onClick={() => navigate(`/invoices/${inv._id}`)}
                     >
+                      {isClusterHead && (
+                        <td
+                          style={{ ...S.td, width: 36 }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {isBulkEligible(inv) && (
+                            <input
+                              type="checkbox"
+                              style={BA.checkbox}
+                              checked={!!selected[inv._id]}
+                              disabled={
+                                !selected[inv._id] && selectedCount >= BULK_MAX
+                              }
+                              onChange={() => toggleSelect(inv)}
+                            />
+                          )}
+                        </td>
+                      )}
                       <td style={S.td}>
                         <span style={S.reqId}>{inv.requestId}</span>
                         {inv.source === "fixed_payment" && (
@@ -576,10 +713,282 @@ export default function InvoiceRequests() {
             </div>
           </div>
         )}
+        {/* ── Bulk approve summary popup ───────────────────── */}
+        {bulkOpen && (
+          <div style={QA.overlay} onClick={closeBulk}>
+            <div
+              style={{ ...QA.modal, maxWidth: 680 }}
+              role="dialog"
+              aria-modal="true"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {!bulkResult ? (
+                <>
+                  <h3 style={QA.title}>✅ Bulk Approve — Summary</h3>
+                  <p style={QA.sub}>
+                    You are approving <strong>{selectedCount}</strong> invoice
+                    {selectedCount > 1 ? "s" : ""} worth{" "}
+                    <strong>{inr(selectedTotal)}</strong>. Each will move to
+                    Accounts for payment processing.
+                  </p>
+
+                  <ApprovalCycleNotice
+                    cycle={cycle}
+                    loading={cycleLoading}
+                    isFinalApproval
+                  />
+
+                  <div style={BA.listWrap}>
+                    <table style={BA.table}>
+                      <thead>
+                        <tr>
+                          {[
+                            "Invoice ID",
+                            "Branch",
+                            "Vendor",
+                            "Net Payable",
+                          ].map((h) => (
+                            <th
+                              key={h}
+                              style={{
+                                ...BA.th,
+                                textAlign:
+                                  h === "Net Payable" ? "right" : "left",
+                              }}
+                            >
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedList.map((inv) => (
+                          <tr key={inv._id}>
+                            <td style={{ ...BA.td, ...S.reqId }}>
+                              {inv.requestId}
+                            </td>
+                            <td style={BA.td}>{inv.branch?.name || "—"}</td>
+                            <td style={BA.td}>
+                              {inv.vendor?.vendorName || "—"}
+                            </td>
+                            <td
+                              style={{
+                                ...BA.td,
+                                textAlign: "right",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {inr(inv.netPayable)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td style={BA.tf} colSpan={3}>
+                            Total ({selectedCount})
+                          </td>
+                          <td style={{ ...BA.tf, textAlign: "right" }}>
+                            {inr(selectedTotal)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  {branchBreakdown(selectedList).length > 1 && (
+                    <div style={BA.branchRow}>
+                      {branchBreakdown(selectedList).map((b) => (
+                        <span key={b.name} style={BA.branchChip}>
+                          {b.name}: {b.count} · {inr(b.total)}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  <label style={{ ...QA.label, marginTop: 12 }}>
+                    Remarks (optional)
+                  </label>
+                  <input
+                    style={QA.input}
+                    placeholder="Added to every invoice's approval history"
+                    value={bulkRemarks}
+                    maxLength={300}
+                    onChange={(e) => setBulkRemarks(e.target.value)}
+                  />
+
+                  {bulkError && (
+                    <div style={{ ...QA.error, marginTop: 10 }}>
+                      {bulkError}
+                    </div>
+                  )}
+
+                  <div style={QA.actions}>
+                    <button
+                      style={QA.cancel}
+                      disabled={bulkLoading}
+                      onClick={closeBulk}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      style={{ ...QA.confirm, opacity: bulkLoading ? 0.6 : 1 }}
+                      disabled={bulkLoading}
+                      onClick={confirmBulkApprove}
+                    >
+                      {bulkLoading
+                        ? `Approving ${selectedCount}…`
+                        : `✓ Confirm & Approve ${selectedCount}`}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h3 style={QA.title}>
+                    {bulkResult.failedCount === 0
+                      ? "✅ Bulk approval complete"
+                      : "⚠ Bulk approval finished with issues"}
+                  </h3>
+                  <p style={QA.sub}>
+                    <strong>{bulkResult.approvedCount}</strong> of{" "}
+                    {bulkResult.requested} approved ·{" "}
+                    <strong>{inr(bulkResult.totalApprovedAmount)}</strong> sent
+                    to Accounts for payment processing.
+                  </p>
+                  {bulkResult.failedCount > 0 && (
+                    <div style={QA.error}>
+                      <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                        Not approved ({bulkResult.failedCount}) — still selected
+                      </div>
+                      {bulkResult.failed.map((f) => (
+                        <div key={f._id}>
+                          <span style={{ fontFamily: "monospace" }}>
+                            {f.requestId || f._id}
+                          </span>{" "}
+                          — {f.message}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={QA.actions}>
+                    <button style={QA.confirm} onClick={closeBulk}>
+                      Done
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </main>
     </div>
   );
 }
+
+// ── Bulk approve helpers & styles ──────────────────────────
+const BULK_MAX = 50; // keep in step with BULK_APPROVE_MAX in invoiceController
+
+const inr = (n) =>
+  `₹${(Number(n) || 0).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
+
+const branchBreakdown = (list) => {
+  const map = {};
+  list.forEach((inv) => {
+    const name = inv.branch?.name || "—";
+    map[name] = map[name] || { name, count: 0, total: 0 };
+    map[name].count += 1;
+    map[name].total += Number(inv.netPayable) || 0;
+  });
+  return Object.values(map).sort((a, b) => b.total - a.total);
+};
+
+const BA = {
+  bar: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    flexWrap: "wrap",
+    background: "#f0fdfa",
+    border: "1px solid #99f6e4",
+    borderRadius: 10,
+    padding: "10px 14px",
+    marginBottom: 12,
+    position: "sticky",
+    top: 0,
+    zIndex: 5,
+  },
+  barText: { fontSize: 14, color: "#0f766e" },
+  barHint: { fontSize: 12, color: "#64748b" },
+  clearBtn: {
+    background: "#fff",
+    color: "#475569",
+    border: "1px solid #cbd5e1",
+    padding: "8px 14px",
+    borderRadius: 8,
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  approveBtn: {
+    background: "#16a34a",
+    color: "#fff",
+    border: "none",
+    padding: "8px 16px",
+    borderRadius: 8,
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+  },
+  checkbox: {
+    width: 16,
+    height: 16,
+    cursor: "pointer",
+    accentColor: "#0198A3",
+  },
+  listWrap: {
+    maxHeight: 280,
+    overflowY: "auto",
+    border: "1px solid #e2e8f0",
+    borderRadius: 8,
+    marginTop: 12,
+  },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
+  th: {
+    position: "sticky",
+    top: 0,
+    background: "#f8fafc",
+    padding: "8px 10px",
+    fontSize: 11,
+    fontWeight: 600,
+    color: "#475569",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    borderBottom: "1px solid #e2e8f0",
+  },
+  td: {
+    padding: "8px 10px",
+    borderBottom: "1px solid #f1f5f9",
+    color: "#334155",
+  },
+  tf: {
+    position: "sticky",
+    bottom: 0,
+    background: "#f8fafc",
+    padding: "9px 10px",
+    fontWeight: 700,
+    color: "#1a3c6e",
+    borderTop: "1px solid #e2e8f0",
+  },
+  branchRow: { display: "flex", flexWrap: "wrap", gap: 6, marginTop: 10 },
+  branchChip: {
+    fontSize: 12,
+    background: "#f1f5f9",
+    color: "#475569",
+    borderRadius: 999,
+    padding: "3px 10px",
+  },
+};
 
 const C = { primary: "#1a3c6e", accent: "#2563eb", border: "#e2e8f0" };
 const QA = {

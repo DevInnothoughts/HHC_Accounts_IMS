@@ -7,8 +7,12 @@
 // ============================================================
 import { useState, useEffect, useCallback } from "react";
 import React from "react";
+import { createPortal } from "react-dom";
 import api from "../api/axios";
 import { downloadExcel, filterMeta } from "../utils/exportExcel";
+import BranchMultiSelect, {
+  branchNamesOf,
+} from "../components/BranchMultiSelect.jsx";
 
 const C = {
   primary: "#1a3c6e",
@@ -34,7 +38,20 @@ const XlsBtn = ({ onClick, label = "Excel" }) => (
   </button>
 );
 
-export default function SubtypeReport({ branches: scopeBranches = [] }) {
+export default function SubtypeReport({
+  branches: scopeBranches = [],
+  filterSlot,
+}) {
+  // Inside the Reports page the filter section is rendered into a slot
+  // above the tab bar (same place as the Invoice / Payment / Expense
+  // filters). filterSlot: undefined = standalone, render inline;
+  // null = slot not mounted yet; element = render there.
+  const renderFilters = (node) =>
+    filterSlot === undefined
+      ? node
+      : filterSlot
+        ? createPortal(node, filterSlot)
+        : null;
   const [view, setView] = useState("summary");
   const BLANK = {
     from: "",
@@ -116,94 +133,108 @@ export default function SubtypeReport({ branches: scopeBranches = [] }) {
   const badRange = draft.from && draft.to && draft.from > draft.to;
   const dirty = JSON.stringify(draft) !== JSON.stringify(filters);
 
-  const branchOptions = data?.branches?.length ? data.branches : scopeBranches;
+  // The full list the user may pick from. data.branches is only the
+  // branches in the current result, so it can't be the option list —
+  // otherwise picking one branch would hide all the others.
+  const branchOptions = scopeBranches.length
+    ? scopeBranches
+    : data?.branches || [];
+  const branchOpts = branchOptions.map((b) => ({
+    value: b.branchId,
+    label: b.branchName,
+  }));
   const rows = data?.subtypes || [];
   const t = data?.totals || {};
-  const activeBranch = branchOptions.find(
-    (b) => String(b.branchId) === filters.branch,
-  );
+  // Multi-select: "Sangamvadi, Bopal" or null for all branches
+  const activeBranchNames = branchNamesOf(branchOpts, filters.branch);
 
   return (
     <div style={S.wrap}>
-      {/* Controls */}
-      <div style={S.bar}>
-        <Field label="Type">
-          <select
-            style={S.input}
-            value={draft.expenseType}
-            onChange={set("expenseType")}
-          >
-            <option value="Revenue">Revenue</option>
-            <option value="Capital">Capital</option>
-          </select>
-        </Field>
-        <Field label="Branch">
-          <select style={S.input} value={draft.branch} onChange={set("branch")}>
-            <option value="">All branches</option>
-            {branchOptions.map((b) => (
-              <option key={b.branchId} value={b.branchId}>
-                {b.branchName}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="From">
-          <input
-            type="date"
-            style={S.input}
-            value={draft.from}
-            onChange={set("from")}
-          />
-        </Field>
-        <Field label="To">
-          <input
-            type="date"
-            style={S.input}
-            value={draft.to}
-            onChange={set("to")}
-          />
-        </Field>
-        <Field label="Period based on">
-          <select
-            style={S.input}
-            value={draft.dateField}
-            onChange={set("dateField")}
-          >
-            <option value="invoiceDate">Invoice date</option>
-            <option value="createdAt">Entry date</option>
-          </select>
-        </Field>
-        <Field label="Include">
-          <select style={S.input} value={draft.status} onChange={set("status")}>
-            <option value="">Everything except drafts</option>
-            <option value="approved">Fully approved only</option>
-            <option value="all">Everything including drafts</option>
-          </select>
-        </Field>
-        <div style={S.actions}>
-          <button
-            style={{
-              ...S.applyBtn,
-              opacity: badRange ? 0.5 : 1,
-              cursor: badRange ? "not-allowed" : "pointer",
-            }}
-            onClick={apply}
-            disabled={badRange}
-          >
-            {dirty ? "Apply changes" : "Apply"}
-          </button>
-          <button
-            style={S.exportBtn}
-            onClick={exportExcel}
-            disabled={exporting || dirty}
-          >
-            {exporting ? "Preparing…" : "Export to Excel"}
-          </button>
-          <button style={S.resetBtn} onClick={reset}>
-            Reset
-          </button>
-        </div>
-      </div>
+      {renderFilters(
+        <>
+          {/* Controls */}
+          <div style={S.bar}>
+            <Field label="Type">
+              <select
+                style={S.input}
+                value={draft.expenseType}
+                onChange={set("expenseType")}
+              >
+                <option value="Revenue">Revenue</option>
+                <option value="Capital">Capital</option>
+              </select>
+            </Field>
+            <Field label="Branch">
+              <BranchMultiSelect
+                style={S.input}
+                options={branchOpts}
+                value={draft.branch}
+                onChange={(v) => setDraft((d) => ({ ...d, branch: v }))}
+              />
+            </Field>
+            <Field label="From">
+              <input
+                type="date"
+                style={S.input}
+                value={draft.from}
+                onChange={set("from")}
+              />
+            </Field>
+            <Field label="To">
+              <input
+                type="date"
+                style={S.input}
+                value={draft.to}
+                onChange={set("to")}
+              />
+            </Field>
+            <Field label="Period based on">
+              <select
+                style={S.input}
+                value={draft.dateField}
+                onChange={set("dateField")}
+              >
+                <option value="invoiceDate">Invoice date</option>
+                <option value="createdAt">Entry date</option>
+              </select>
+            </Field>
+            <Field label="Include">
+              <select
+                style={S.input}
+                value={draft.status}
+                onChange={set("status")}
+              >
+                <option value="">Everything except drafts</option>
+                <option value="approved">Fully approved only</option>
+                <option value="all">Everything including drafts</option>
+              </select>
+            </Field>
+            <div style={S.actions}>
+              <button
+                style={{
+                  ...S.applyBtn,
+                  opacity: badRange ? 0.5 : 1,
+                  cursor: badRange ? "not-allowed" : "pointer",
+                }}
+                onClick={apply}
+                disabled={badRange}
+              >
+                {dirty ? "Apply changes" : "Apply"}
+              </button>
+              <button
+                style={S.exportBtn}
+                onClick={exportExcel}
+                disabled={exporting || dirty}
+              >
+                {exporting ? "Preparing…" : "Export to Excel"}
+              </button>
+              <button style={S.resetBtn} onClick={reset}>
+                Reset
+              </button>
+            </div>
+          </div>
+        </>,
+      )}
 
       {filters.dateField === "createdAt" && (
         <div style={S.note}>
@@ -242,8 +273,8 @@ export default function SubtypeReport({ branches: scopeBranches = [] }) {
             {l}
           </button>
         ))}
-        {activeBranch && (
-          <span style={S.scopeTag}>Showing {activeBranch.branchName} only</span>
+        {activeBranchNames && (
+          <span style={S.scopeTag}>Showing {activeBranchNames} only</span>
         )}
       </div>
 
