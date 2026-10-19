@@ -229,7 +229,7 @@ export default function PaymentProcessing() {
   // Payment-cycle processing window (8–10 / 18–21) and how many
   // raiseable invoices it is holding back.
   const [processingWindow, setProcessingWindow] = useState(null);
-  const [lockedCount, setLockedCount] = useState(0);
+  const [outOfCycleCount, setOutOfCycleCount] = useState(0);
   const [utrDate, setUtrDate] = useState(() =>
     new Date().toISOString().slice(0, 10),
   );
@@ -351,7 +351,7 @@ export default function PaymentProcessing() {
       setUnlinked(invRes.data.unlinked || 0);
       setNoPaymentRecord(invRes.data.approvedWithoutPaymentRecord || 0);
       setProcessingWindow(invRes.data.processingWindow || null);
-      setLockedCount(invRes.data.lockedCount || 0);
+      setOutOfCycleCount(invRes.data.outOfCycleCount || 0);
 
       // Only the active tab's rows are rendered. Processed statuses are now
       // excluded server-side via `excludeProcessed`, so no client filtering.
@@ -398,7 +398,9 @@ export default function PaymentProcessing() {
       setAdjustInv(null);
       fetchData();
     } catch (err) {
-      setAdjustError(err.response?.data?.message || "Could not update the amount");
+      setAdjustError(
+        err.response?.data?.message || "Could not update the amount",
+      );
     } finally {
       setAdjustSaving(false);
     }
@@ -948,17 +950,17 @@ export default function PaymentProcessing() {
                 {processingWindow?.active && (
                   <div style={S.cycleBanner}>
                     <div style={{ fontWeight: 700 }}>
-                      🔒 {processingWindow.cycleLabel} processing window ·{" "}
+                      ⏱ {processingWindow.cycleLabel} processing window ·{" "}
                       {processingWindow.processingWindowLabel}
                     </div>
                     <div style={{ marginTop: 3 }}>
-                      Only invoices approved by the Cluster Head by{" "}
-                      {processingWindow.cutoffDateTimeLabel} can be processed
-                      now (bank payment {processingWindow.paymentWindowLabel}).
-                      Invoices approved after the cut-off are locked until{" "}
-                      {processingWindow.unlocksLabel}
-                      {lockedCount > 0
-                        ? ` — ${lockedCount} invoice${lockedCount === 1 ? " is" : "s are"} locked.`
+                      This cycle covers invoices approved by the Cluster Head by{" "}
+                      {processingWindow.cutoffDateTimeLabel} (bank payment{" "}
+                      {processingWindow.paymentWindowLabel}). Invoices approved
+                      after the cut-off are highlighted as{" "}
+                      <strong>Next cycle</strong>
+                      {outOfCycleCount > 0
+                        ? ` — ${outOfCycleCount} invoice${outOfCycleCount === 1 ? "" : "s"} on this list.`
                         : "."}
                     </div>
                   </div>
@@ -994,10 +996,10 @@ export default function PaymentProcessing() {
                           "Partially Paid",
                           "Payment Rejected",
                         ].includes(pay?.status);
-                        const isCycleLocked =
-                          isRaiseableStatus && !!inv.cycleLock?.locked;
-                        const canRaise =
-                          isAccounts && isRaiseableStatus && !isCycleLocked;
+                        // Highlight only — no longer blocks raising.
+                        const isOutOfCycle =
+                          isRaiseableStatus && !!inv.cycleFlag?.outOfCycle;
+                        const canRaise = isAccounts && isRaiseableStatus;
                         const cycleTag = inv.paymentCycle?.assigned?.cycleLabel;
                         const isFullyPaid = pay?.status === "Fully Paid";
                         const hasActivePayment = [
@@ -1013,18 +1015,48 @@ export default function PaymentProcessing() {
                             ? Math.min(100, Math.round((paid / total) * 100))
                             : 0;
                         return (
-                          <tr key={inv._id} style={S.tr}>
-                            <td style={S.td}>
+                          <tr
+                            key={inv._id}
+                            style={
+                              isOutOfCycle
+                                ? { ...S.tr, ...S.trOutOfCycle }
+                                : S.tr
+                            }
+                          >
+                            <td
+                              style={
+                                isOutOfCycle
+                                  ? { ...S.td, ...S.tdOutOfCycle }
+                                  : S.td
+                              }
+                            >
                               <span style={S.reqId}>{inv.requestId}</span>
+                              {isOutOfCycle && (
+                                <div
+                                  style={S.nextCycleChip}
+                                  title={inv.cycleFlag.reason}
+                                >
+                                  ⏭ Next cycle ·{" "}
+                                  {inv.cycleFlag.paymentWindowLabel}
+                                </div>
+                              )}
                               {cycleTag && (
                                 <div style={S.cycleTag}>{cycleTag}</div>
                               )}
                               {inv.creditNoteTotal > 0 && (
                                 <div
-                                  style={{ ...S.fixedTag, color: "#b91c1c", background: "#fef2f2", borderColor: "#fecaca" }}
+                                  style={{
+                                    ...S.fixedTag,
+                                    color: "#b91c1c",
+                                    background: "#fef2f2",
+                                    borderColor: "#fecaca",
+                                  }}
                                   title={`Reduced by approved credit notes. Original net payable ₹${Number(inv.originalTotals?.netPayable || 0).toLocaleString("en-IN")}`}
                                 >
-                                  🧾 CN −₹{Number(inv.creditNoteTotal).toLocaleString("en-IN")}
+                                  🧾 CN −₹
+                                  {Number(inv.creditNoteTotal).toLocaleString(
+                                    "en-IN",
+                                  )}
                                 </div>
                               )}
                               {inv.source === "fixed_payment" && (
@@ -1032,7 +1064,10 @@ export default function PaymentProcessing() {
                                   style={S.fixedTag}
                                   title="Fixed monthly payment — created and approved automatically"
                                 >
-                                  🔁 Fixed{inv.fixedPeriod ? ` · ${inv.fixedPeriod}` : ""}
+                                  🔁 Fixed
+                                  {inv.fixedPeriod
+                                    ? ` · ${inv.fixedPeriod}`
+                                    : ""}
                                 </div>
                               )}
                             </td>
@@ -1135,53 +1170,48 @@ export default function PaymentProcessing() {
                                 >
                                   🎉 Fully Paid
                                 </span>
-                              ) : isCycleLocked ? (
-                                <span
-                                  style={S.lockedChip}
-                                  title={inv.cycleLock.reason}
-                                >
-                                  🔒 Locked till {inv.cycleLock.unlocksLabel}
-                                </span>
                               ) : canRaise ? (
                                 <>
-                                <button
-                                  style={{
-                                    ...S.raiseBtn,
-                                    ...(pay?.status === "Partially Paid"
-                                      ? { background: "#d97706" }
-                                      : {}),
-                                  }}
-                                  onClick={() => {
-                                    setRaiseModal(inv);
-                                    setRaiseForm({
-                                      paymentRemarks: "",
-                                      scheduledDate: "",
-                                      paymentAmount: remaining,
-                                      paymentType: "full",
-                                    });
-                                  }}
-                                >
-                                  {pay?.status === "Partially Paid"
-                                    ? "⚡ Pay Remaining"
-                                    : pay?.status === "Payment Rejected"
-                                      ? "🔄 Re-raise Payment"
-                                      : "💳 Raise Payment"}
-                                </button>
-                                {inv.source === "fixed_payment" &&
-                                  pay?.status === "Payment Pending" &&
-                                  !(pay?.paidAmount > 0) && (
-                                    <button
-                                      style={S.adjustBtn}
-                                      onClick={() => {
-                                        setAdjustInv(inv);
-                                        setAdjustAmount(String(inv.amount ?? ""));
-                                        setAdjustReason("");
-                                        setAdjustError("");
-                                      }}
-                                    >
-                                      Adjust amount
-                                    </button>
-                                  )}
+                                  <button
+                                    style={{
+                                      ...S.raiseBtn,
+                                      ...(pay?.status === "Partially Paid"
+                                        ? { background: "#d97706" }
+                                        : {}),
+                                    }}
+                                    onClick={() => {
+                                      setRaiseModal(inv);
+                                      setRaiseForm({
+                                        paymentRemarks: "",
+                                        scheduledDate: "",
+                                        paymentAmount: remaining,
+                                        paymentType: "full",
+                                      });
+                                    }}
+                                  >
+                                    {pay?.status === "Partially Paid"
+                                      ? "⚡ Pay Remaining"
+                                      : pay?.status === "Payment Rejected"
+                                        ? "🔄 Re-raise Payment"
+                                        : "💳 Raise Payment"}
+                                  </button>
+                                  {inv.source === "fixed_payment" &&
+                                    pay?.status === "Payment Pending" &&
+                                    !(pay?.paidAmount > 0) && (
+                                      <button
+                                        style={S.adjustBtn}
+                                        onClick={() => {
+                                          setAdjustInv(inv);
+                                          setAdjustAmount(
+                                            String(inv.amount ?? ""),
+                                          );
+                                          setAdjustReason("");
+                                          setAdjustError("");
+                                        }}
+                                      >
+                                        Adjust amount
+                                      </button>
+                                    )}
                                 </>
                               ) : (
                                 <button
@@ -1729,14 +1759,18 @@ export default function PaymentProcessing() {
             <div style={S.modal}>
               <h3 style={S.modalTitle}>Adjust this month's amount</h3>
               <p style={{ fontSize: 13, color: "#475569", margin: "0 0 12px" }}>
-                <strong>{adjustInv.requestId}</strong> · {adjustInv.vendor?.vendorName}
+                <strong>{adjustInv.requestId}</strong> ·{" "}
+                {adjustInv.vendor?.vendorName}
                 {adjustInv.fixedPeriod ? ` · ${adjustInv.fixedPeriod}` : ""}
                 <br />
-                Current base amount ₹{Number(adjustInv.amount || 0).toLocaleString("en-IN")}
-                {" "}(net ₹{Number(adjustInv.netPayable || 0).toLocaleString("en-IN")}).
+                Current base amount ₹
+                {Number(adjustInv.amount || 0).toLocaleString("en-IN")} (net ₹
+                {Number(adjustInv.netPayable || 0).toLocaleString("en-IN")}).
                 GST % and TDS % stay as set on the fixed payment.
               </p>
-              <label style={S.adjLabel}>New base amount (₹, before GST) *</label>
+              <label style={S.adjLabel}>
+                New base amount (₹, before GST) *
+              </label>
               <input
                 type="number"
                 min="0"
@@ -1752,12 +1786,16 @@ export default function PaymentProcessing() {
                 value={adjustReason}
                 onChange={(e) => setAdjustReason(e.target.value)}
               />
-              <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 10 }}>
+              <div
+                style={{ fontSize: 11.5, color: "#64748b", marginBottom: 10 }}
+              >
                 Applies to this month only. To change every month, edit the
                 fixed payment (needs Super Admin approval).
               </div>
               {adjustError && <div style={S.adjError}>{adjustError}</div>}
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              <div
+                style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
+              >
                 <button
                   style={S.adjCancel}
                   disabled={adjustSaving}
@@ -1769,12 +1807,16 @@ export default function PaymentProcessing() {
                   style={{
                     ...S.adjSave,
                     opacity:
-                      adjustSaving || !(parseFloat(adjustAmount) > 0) || adjustReason.trim().length < 3
+                      adjustSaving ||
+                      !(parseFloat(adjustAmount) > 0) ||
+                      adjustReason.trim().length < 3
                         ? 0.5
                         : 1,
                   }}
                   disabled={
-                    adjustSaving || !(parseFloat(adjustAmount) > 0) || adjustReason.trim().length < 3
+                    adjustSaving ||
+                    !(parseFloat(adjustAmount) > 0) ||
+                    adjustReason.trim().length < 3
                   }
                   onClick={handleAdjustAmount}
                 >
@@ -1793,6 +1835,19 @@ export default function PaymentProcessing() {
                 Invoice <strong>{raiseModal.requestId}</strong> ·{" "}
                 <strong>{raiseModal.vendor?.vendorName}</strong>
               </p>
+
+              {raiseModal.cycleFlag?.outOfCycle && (
+                <div style={S.cycleBanner}>
+                  <div style={{ fontWeight: 700 }}>
+                    ⏭ Belongs to the {raiseModal.cycleFlag.cycleLabel} (
+                    {raiseModal.cycleFlag.paymentWindowLabel})
+                  </div>
+                  <div style={{ marginTop: 3 }}>
+                    {raiseModal.cycleFlag.reason} You can still raise it now —
+                    it will be noted in the audit log.
+                  </div>
+                </div>
+              )}
 
               <div style={S.invoiceSummary}>
                 <div style={S.summaryRow}>
@@ -2444,7 +2499,13 @@ const S = {
     color: "#475569",
     cursor: "pointer",
   },
-  adjLabel: { display: "block", fontSize: 12.5, fontWeight: 600, color: "#475569", marginBottom: 5 },
+  adjLabel: {
+    display: "block",
+    fontSize: 12.5,
+    fontWeight: 600,
+    color: "#475569",
+    marginBottom: 5,
+  },
   adjInput: {
     width: "100%",
     boxSizing: "border-box",
@@ -2506,15 +2567,19 @@ const S = {
     padding: "1px 8px",
     whiteSpace: "nowrap",
   },
-  lockedChip: {
+  // Out-of-cycle highlight (no lock): soft amber row + left accent.
+  trOutOfCycle: { background: "#fffbeb" },
+  tdOutOfCycle: { boxShadow: "inset 3px 0 0 #d97706" },
+  nextCycleChip: {
     display: "inline-block",
-    fontSize: 11.5,
+    marginTop: 4,
+    fontSize: 10.5,
     fontWeight: 600,
     color: "#92400e",
     background: "#fef3c7",
     border: "1px solid #fde68a",
-    borderRadius: 6,
-    padding: "5px 9px",
+    borderRadius: 999,
+    padding: "1px 8px",
     whiteSpace: "nowrap",
     cursor: "help",
   },

@@ -624,7 +624,7 @@ function PaymentCycleDetail({ cycle, accent, onClose }) {
               marginTop: 4,
             }}
           >
-            <span style={{ ...DT.k, color: C.amber }}>🔒 Processing now</span>
+            <span style={{ ...DT.k, color: C.amber }}>⏱ Processing now</span>
             <span style={DT.v}>
               {cycle.processingWindow.cycleLabel} ·{" "}
               {cycle.processingWindow.processingWindowLabel}

@@ -34,7 +34,7 @@ const {
 } = require("../services/paymentDocumentService");
 const {
   getProcessingWindow,
-  getProcessingLock,
+  getCycleFlag,
   publicWindow,
 } = require("../utils/paymentCycle");
 
@@ -230,20 +230,21 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
       .skip((currentPage - 1) * perPage)
       .limit(perPage);
 
-    // ── Payment-cycle processing lock (8–10 / 18–21) ─────────
-    // Derived at read time; nothing is written to the invoice.
+    // ── Payment-cycle highlight (8–10 / 18–21) ───────────────
+    // Derived at read time; nothing is written to the invoice. Highlight
+    // only — out-of-cycle invoices can still be raised.
     const now = new Date();
     const window = getProcessingWindow(now);
     const invoices = invoiceDocs.map((doc) => {
       const obj = doc.toObject();
-      obj.cycleLock = getProcessingLock(obj, now, window);
+      obj.cycleFlag = getCycleFlag(obj, now, window);
       return obj;
     });
 
-    // How many still-raiseable invoices are locked in this window, across
+    // How many still-raiseable invoices belong to a later cycle, across
     // all pages. Final approvals since the new rules all carry
     // paymentCycle.assigned.recordedAt, so this index-backed filter is exact.
-    let lockedCount = 0;
+    let outOfCycleCount = 0;
     if (window.active && req.query.withCounts === "true") {
       const raiseablePayIds = await limitedIds(
         PaymentProcessing,
@@ -253,18 +254,18 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
         },
         5000,
       );
-      lockedCount = await InvoiceRequest.countDocuments({
+      outOfCycleCount = await InvoiceRequest.countDocuments({
         ...baseQuery,
         paymentRequest: { $in: raiseablePayIds },
         "paymentCycle.assigned.recordedAt": { $gt: window.lockAfter },
-        source: { $ne: "fixed_payment" }, // fixed payments are never locked
+        source: { $ne: "fixed_payment" }, // fixed payments are never flagged
       });
     }
 
     res.json({
       invoices,
       processingWindow: publicWindow(window), // { active, cycleLabel, ... }
-      lockedCount, // raiseable invoices locked in the current window
+      outOfCycleCount, // raiseable invoices that belong to a later cycle
       total, // rows matching the active filter
       baseTotal, // rows ignoring the payment-status filter ("All")
       statusCounts, // { "Payment Pending": n, ... } or null
@@ -397,17 +398,9 @@ exports.raisePayment = async (req, res) => {
       });
     }
 
-    // ✅ Payment-cycle lock: during a processing window (8–10 / 18–21),
-    //    invoices finally approved after that window's cut-off wait for
-    //    their own cycle. Server-side, so the UI cannot be bypassed.
-    const cycleLock = getProcessingLock(invoice);
-    if (cycleLock.locked) {
-      return res.status(423).json({
-        code: "CYCLE_LOCKED",
-        message: cycleLock.reason,
-        unlocksAt: cycleLock.unlocksAt,
-      });
-    }
+    // Payment cycle (Oct 2026): no longer a lock. An invoice from a later
+    // cycle can be raised early; it is only noted in the audit log below.
+    const cycleFlag = getCycleFlag(invoice);
 
     // ✅ A credit note awaiting approval will change the amount payable —
     //    paying now would pay the old amount.
@@ -516,6 +509,9 @@ exports.raisePayment = async (req, res) => {
       action: "RAISE_PAYMENT",
       module: "Payment",
       targetId: payment._id,
+      ...(cycleFlag.outOfCycle
+        ? { reason: `Raised ahead of its payment cycle — ${cycleFlag.reason}` }
+        : {}),
       req,
     });
     res.json(payment);
@@ -2336,7 +2332,9 @@ exports.correctUTR = async (req, res) => {
         return res.status(409).json({
           code: "UTR_DUPLICATE",
           message: `UTR ${utr} is already recorded on ${
-            elsewhere ? `payment ${elsewhere.paymentId}` : "another installment of this payment"
+            elsewhere
+              ? `payment ${elsewhere.paymentId}`
+              : "another installment of this payment"
           }. Save anyway?`,
         });
       }

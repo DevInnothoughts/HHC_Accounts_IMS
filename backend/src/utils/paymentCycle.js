@@ -2,7 +2,7 @@
 // BACKEND: src/utils/paymentCycle.js — REPLACE WHOLE FILE
 // ------------------------------------------------------------
 // The single source of truth for payment-cycle dates and the
-// payment-processing lock. Used by the API, by the submit and approval
+// out-of-cycle highlight on the payment queue. Used by the API, by the submit and approval
 // popups, by every dashboard and by the Accounts payment queue, so
 // none of them can drift apart.
 //
@@ -253,7 +253,7 @@ const resolvePaymentCycle = (basisDate = new Date(), options = {}) => {
 
 // ── Processing window (Accounts) ───────────────────────────
 // Is Accounts inside a processing window on this date, and for which
-// cycle? Outside the windows `active` is false and nothing is locked.
+// cycle? Outside the windows `active` is false and nothing is flagged.
 const getProcessingWindow = (now = new Date()) => {
   const at = toDate(now);
   const { year, monthIndex, day } = istParts(at);
@@ -264,8 +264,7 @@ const getProcessingWindow = (now = new Date()) => {
 
   if (!cycle) {
     // Next window to open, for display only.
-    const upcoming =
-      CYCLE_LIST.find((c) => day < c.processingStartDay) || null;
+    const upcoming = CYCLE_LIST.find((c) => day < c.processingStartDay) || null;
     const nextWin = upcoming
       ? { cycle: upcoming, year, monthIndex }
       : { cycle: CYCLES.FIRST, ...addMonth(year, monthIndex) };
@@ -292,7 +291,7 @@ const getProcessingWindow = (now = new Date()) => {
     cutoffDateTimeLabel: d.cutoffDateTimeLabel,
     // Invoices finally approved AFTER this instant belong to a later cycle.
     lockAfter: istEndOfDay(year, monthIndex, cycle.approvalCutoffDay),
-    // Locked invoices become processable from 00:00 IST on this day.
+    // The day the current processing window ends +1 (display only).
     unlocksAt: istMidnight(year, monthIndex, cycle.processingEndDay + 1),
     unlocksLabel: fmt(year, monthIndex, cycle.processingEndDay + 1),
     _index: cycleIndex(instance),
@@ -320,43 +319,42 @@ const finalApprovalDateOf = (invoice) => {
 };
 
 /**
- * Is this invoice locked for payment processing right now?
+ * Does this invoice belong to a LATER cycle than the one Accounts is
+ * processing right now?
  *
- * Locked only while a processing window is open (8–10 / 18–21) AND the
- * invoice's final approval came after that window's cut-off, i.e. it
- * belongs to a later cycle than the one being processed.
+ * Oct 2026: this is a highlight only — it no longer blocks raising a
+ * payment. True only while a processing window is open (8–10 / 18–21)
+ * AND the invoice's final approval came after that window's cut-off.
  */
-const getProcessingLock = (invoice, now = new Date(), window = null) => {
+const getCycleFlag = (invoice, now = new Date(), window = null) => {
   const win = window || getProcessingWindow(now);
-  if (!win.active) return { locked: false };
+  if (!win.active) return { outOfCycle: false };
 
-  // Fixed monthly payments are never held by the processing windows.
+  // Fixed monthly payments sit outside the payment cycles.
   const src = invoice?.toObject ? invoice.toObject().source : invoice?.source;
-  if (src === "fixed_payment") return { locked: false };
+  if (src === "fixed_payment") return { outOfCycle: false };
 
   const approvedAt = finalApprovalDateOf(invoice);
   if (!approvedAt || Number.isNaN(approvedAt.getTime())) {
-    return { locked: false };
+    return { outOfCycle: false };
   }
-  if (isBeforeNewRules(approvedAt)) return { locked: false };
+  if (isBeforeNewRules(approvedAt)) return { outOfCycle: false };
 
   const { year, monthIndex, day } = istParts(approvedAt);
   const own = cycleForDay(year, monthIndex, day);
-  if (cycleIndex(own) <= win._index) return { locked: false };
+  if (cycleIndex(own) <= win._index) return { outOfCycle: false };
 
   const ownDesc = describe(own);
   return {
-    locked: true,
-    unlocksAt: win.unlocksAt,
-    unlocksLabel: win.unlocksLabel,
+    outOfCycle: true,
     cycleKey: ownDesc.cycleKey,
     cycleLabel: ownDesc.cycleLabel,
+    cycleShortLabel: ownDesc.cycleShortLabel,
     paymentWindowLabel: ownDesc.paymentWindowLabel,
     reason:
-      `Locked during the ${win.cycleLabel} processing window (${win.processingWindowLabel}). ` +
-      `This invoice was approved by the Cluster Head after the ${win.cutoffDateTimeLabel} cut-off ` +
-      `and belongs to the ${ownDesc.cycleLabel} (${ownDesc.paymentWindowLabel}). ` +
-      `It can be processed from ${win.unlocksLabel}.`,
+      `Approved by the Cluster Head after the ${win.cutoffDateTimeLabel} cut-off, ` +
+      `so it belongs to the ${ownDesc.cycleLabel} (bank payment ${ownDesc.paymentWindowLabel}), ` +
+      `not the ${win.cycleLabel} being processed now (${win.processingWindowLabel}).`,
   };
 };
 
@@ -387,7 +385,7 @@ module.exports = {
   cycleForDay,
   istParts,
   getProcessingWindow,
-  getProcessingLock,
+  getCycleFlag,
   publicWindow,
   finalApprovalDateOf,
   PAYMENT_CYCLE_TERMS,
