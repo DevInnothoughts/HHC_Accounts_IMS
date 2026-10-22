@@ -85,6 +85,8 @@ export default function InvoiceRequests() {
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkError, setBulkError] = useState("");
   const [bulkResult, setBulkResult] = useState(null);
+  const [bulkAttempted, setBulkAttempted] = useState(false); // confirm was clicked
+  const [bulkTimedOut, setBulkTimedOut] = useState(false); // 502/503/504 / no response
   const [search, setSearch] = useState(savedState.search || "");
   const [debouncedSearch, setDebouncedSearch] = useState(
     savedState.search || "",
@@ -190,23 +192,35 @@ export default function InvoiceRequests() {
     setBulkOpen(true);
   };
 
+  // Once a bulk attempt has been made (success, partial failure or error),
+  // closing the popup clears the WHOLE selection, so the next batch starts
+  // empty. Previously failed / errored invoices stayed ticked — often on
+  // another page, out of sight — and were silently sent again together
+  // with the newly selected ones. Cancel before any attempt keeps the
+  // selection, so the Cluster Head can close the summary and adjust it.
   const closeBulk = () => {
     if (bulkLoading) return;
+    if (bulkAttempted) setSelected({});
     setBulkOpen(false);
     setBulkResult(null);
+    setBulkError("");
+    setBulkAttempted(false);
+    setBulkTimedOut(false);
   };
 
   const confirmBulkApprove = async () => {
     setBulkLoading(true);
     setBulkError("");
+    setBulkAttempted(true);
     try {
       const { data } = await api.post("/invoices/bulk-approve", {
         invoiceIds: selectedList.map((inv) => inv._id),
         remarks: bulkRemarks.trim(),
       });
       setBulkResult(data);
-      // Approved invoices leave the selection; failed ones stay ticked so
-      // the Cluster Head can see and retry or open them.
+      // Approved invoices leave the selection straight away; the rest is
+      // cleared when the result popup is closed (failed ones are listed
+      // in the popup with the reason).
       setSelected((prev) => {
         const next = { ...prev };
         (data.approved || []).forEach((a) => delete next[a._id]);
@@ -216,10 +230,10 @@ export default function InvoiceRequests() {
     } catch (err) {
       const status = err.response?.status;
       // 502/503/504 or no response: the proxy gave up waiting, but the
-      // server usually keeps going and commits the approvals. Refresh so
-      // already-approved invoices drop off instead of being retried blind.
+      // server usually keeps going and commits the approvals. Refresh the
+      // list and block an immediate blind retry of the same batch.
       if (!err.response || [502, 503, 504].includes(status)) {
-        setSelected({});
+        setBulkTimedOut(true);
         fetchInvoices();
         setBulkError(
           "The server took too long to respond. Some or all invoices may already be approved — the list has been refreshed. Please check before approving again.",
@@ -280,6 +294,25 @@ export default function InvoiceRequests() {
   useEffect(() => {
     fetchInvoices();
   }, [fetchInvoices]);
+
+  // Keep the selection honest: when the list reloads, any ticked invoice
+  // that is on screen but no longer awaiting the Cluster Head (approved in
+  // another tab, rejected, or approved by a timed-out batch) is dropped,
+  // and still-eligible ones pick up their latest row data.
+  useEffect(() => {
+    setSelected((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const inv of invoices) {
+        if (!next[inv._id]) continue;
+        if (!isBulkEligible(inv)) delete next[inv._id];
+        else next[inv._id] = inv;
+        changed = true;
+      }
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoices]);
 
   return (
     <div style={S.layout}>
@@ -844,8 +877,11 @@ export default function InvoiceRequests() {
                       Cancel
                     </button>
                     <button
-                      style={{ ...QA.confirm, opacity: bulkLoading ? 0.6 : 1 }}
-                      disabled={bulkLoading}
+                      style={{
+                        ...QA.confirm,
+                        opacity: bulkLoading || bulkTimedOut ? 0.6 : 1,
+                      }}
+                      disabled={bulkLoading || bulkTimedOut}
                       onClick={confirmBulkApprove}
                     >
                       {bulkLoading
@@ -870,7 +906,8 @@ export default function InvoiceRequests() {
                   {bulkResult.failedCount > 0 && (
                     <div style={QA.error}>
                       <div style={{ fontWeight: 700, marginBottom: 4 }}>
-                        Not approved ({bulkResult.failedCount}) — still selected
+                        Not approved ({bulkResult.failedCount}) — please open
+                        these individually
                       </div>
                       {bulkResult.failed.map((f) => (
                         <div key={f._id}>
