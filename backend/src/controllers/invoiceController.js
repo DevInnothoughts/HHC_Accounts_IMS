@@ -399,9 +399,28 @@ exports.submitInvoice = async (req, res) => {
 // bulk), so both paths run the identical workflow: turn check, TDS, payment
 // cycle, payment record, emails, SLA and audit log. Never throws; returns
 // { status, body } for the caller to send or collect.
+//
+// opts.emailQueue (optional array): when given, emails are NOT sent inline —
+// each one is pushed onto the queue for the caller to send after it has
+// responded. Bulk approve uses this; single approve leaves it unset, so its
+// behaviour is unchanged.
 const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
   try {
-    const { remarks, tdsPercentage, auditAction = "APPROVE_INVOICE" } = opts;
+    const {
+      remarks,
+      tdsPercentage,
+      auditAction = "APPROVE_INVOICE",
+      emailQueue,
+    } = opts;
+
+    // Send now, or defer to the caller's queue.
+    const notify = (to, subject, html, mailOpts) => {
+      if (Array.isArray(emailQueue)) {
+        emailQueue.push([to, subject, html, mailOpts]);
+        return Promise.resolve();
+      }
+      return sendNotificationEmail(to, subject, html, mailOpts);
+    };
 
     if (!mongoose.isValidObjectId(invoiceId))
       return { status: 400, body: { message: "Invalid invoice id" } };
@@ -572,7 +591,7 @@ const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
 
       // Notify the originator — including which cycle they landed in
       if (invoice.createdBy?.email && invoice.createdBy?.status === "active") {
-        await sendNotificationEmail(
+        await notify(
           invoice.createdBy.email,
           `✅ Invoice Approved: ${invoice.requestId}`,
           `<p>Your invoice <strong>${invoice.requestId}</strong> has been fully approved by the Cluster Head.</p>
@@ -611,7 +630,7 @@ const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
             ]
           : [];
 
-        await sendNotificationEmail(
+        await notify(
           invoice.vendor.email,
           `Purchase Order Approved – ${branchName}`,
           `
@@ -660,7 +679,7 @@ const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
         const nextUsers = await User.find(nextUsersQuery);
 
         for (const u of nextUsers) {
-          await sendNotificationEmail(
+          await notify(
             u.email,
             `✅ Action Required: Invoice ${invoice.requestId}`,
             `<p>Invoice <strong>${invoice.requestId}</strong> is now at your stage: <strong>${nextStep.label}</strong></p>`,
@@ -743,15 +762,22 @@ exports.bulkApproveInvoices = async (req, res) => {
     const approved = [];
     const failed = [];
 
-    // Sequential on purpose: each approval sends emails and writes a
-    // payment record; running them in parallel would hammer SMTP and make
-    // failures harder to read.
+    // Emails are collected here and sent only AFTER the response goes out.
+    // Sending them inline (2 per invoice: originator + vendor with the PO
+    // attachment fetched from object storage) made an 18-invoice batch run
+    // past the proxy's 60s limit → 504 Gateway Time-out, even though the
+    // approvals themselves were being committed.
+    const emailQueue = [];
+
+    // Sequential on purpose: each approval writes a payment record and an
+    // audit entry; one at a time keeps failures easy to read.
     for (const id of ids) {
       const result = await approveSingleInvoice(id, req, {
         remarks: trimmedRemarks
           ? `Bulk approval — ${trimmedRemarks}`
           : "Bulk approval",
         auditAction: "BULK_APPROVE_INVOICE",
+        emailQueue,
       });
       if (result.status === 200) {
         const inv = result.body;
@@ -788,6 +814,20 @@ exports.bulkApproveInvoices = async (req, res) => {
       approved,
       failed,
     });
+
+    // Fire-and-forget after responding. One at a time so SMTP isn't
+    // flooded; a failed email is logged and never affects the approvals.
+    if (emailQueue.length) {
+      setImmediate(async () => {
+        for (const [to, subject, html, mailOpts] of emailQueue) {
+          try {
+            await sendNotificationEmail(to, subject, html, mailOpts);
+          } catch (mailErr) {
+            console.error("Bulk approve email failed:", to, mailErr);
+          }
+        }
+      });
+    }
   } catch (err) {
     console.error("bulkApproveInvoices error:", err);
     res

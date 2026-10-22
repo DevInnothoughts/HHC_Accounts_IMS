@@ -9,6 +9,15 @@ const transporter = nodemailer.createTransport({
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  // Reuse SMTP connections instead of a fresh TLS handshake per email.
+  pool: true,
+  maxConnections: 3,
+  maxMessages: 100,
+  // Never let a slow/unreachable SMTP server hang a request indefinitely
+  // (nodemailer defaults are 2 min / 30 s / 10 min).
+  connectionTimeout: 15000,
+  greetingTimeout: 10000,
+  socketTimeout: 30000,
 });
 
 console.log("SMTP_HOST:", process.env.SMTP_HOST);

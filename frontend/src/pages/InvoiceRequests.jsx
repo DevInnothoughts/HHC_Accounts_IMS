@@ -214,7 +214,19 @@ export default function InvoiceRequests() {
       });
       fetchInvoices();
     } catch (err) {
-      setBulkError(err.response?.data?.message || "Bulk approval failed");
+      const status = err.response?.status;
+      // 502/503/504 or no response: the proxy gave up waiting, but the
+      // server usually keeps going and commits the approvals. Refresh so
+      // already-approved invoices drop off instead of being retried blind.
+      if (!err.response || [502, 503, 504].includes(status)) {
+        setSelected({});
+        fetchInvoices();
+        setBulkError(
+          "The server took too long to respond. Some or all invoices may already be approved — the list has been refreshed. Please check before approving again.",
+        );
+      } else {
+        setBulkError(err.response?.data?.message || "Bulk approval failed");
+      }
     } finally {
       setBulkLoading(false);
     }
