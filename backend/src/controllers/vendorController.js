@@ -193,6 +193,31 @@ exports.getVendors = async (req, res) => {
   }
 };
 
+// ── Dropdown list for the invoice / fixed-payment forms ──
+// The forms used GET /vendors?…&limit=100 (sorted newest first), so any
+// branch with more than 100 approved vendors silently lost its OLDEST
+// vendors from the dropdown. This returns every matching vendor, uncapped,
+// with only the fields the forms read, sorted by name.
+// Same filters and branch scoping as getVendors (buildVendorQuery).
+const VENDOR_OPTION_FIELDS =
+  "_id vendorName companyName vendorCategory branch panNumber gstNumber " +
+  "bankName ifscCode accountNumber accountHolderName msmeNumber " +
+  "vendorMaster status approvalStatus";
+
+exports.getVendorOptions = async (req, res) => {
+  try {
+    const query = await buildVendorQuery(req);
+    const vendors = await Vendor.find(query)
+      .select(VENDOR_OPTION_FIELDS)
+      .collation({ locale: "en", strength: 2 })
+      .sort({ vendorName: 1 })
+      .lean();
+    res.json({ vendors, total: vendors.length });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+};
+
 exports.getVendorById = async (req, res) => {
   try {
     if (!validId(req.params.id))

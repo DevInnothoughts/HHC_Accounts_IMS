@@ -8,6 +8,9 @@ router.use(authenticate);
 // ── Static paths first: anything below "/:id" that is a single
 // segment would be swallowed by it. Keep new literal routes here.
 router.get("/", ctrl.getVendors);
+// Uncapped dropdown list for invoice / fixed-payment forms. Must stay
+// above "/:id" or "options" is treated as a vendor id.
+router.get("/options", ctrl.getVendorOptions);
 router.get(
   "/export/excel",
   roleGuard(

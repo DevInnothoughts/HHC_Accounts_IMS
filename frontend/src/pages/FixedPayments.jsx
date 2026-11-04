@@ -156,7 +156,7 @@ export default function FixedPayments() {
     if (!modal || !form.branch) return setVendors([]);
     api
       .get(
-        `/vendors?branch=${form.branch}&status=active&approvalStatus=approved&limit=100`,
+        `/vendors/options?branch=${form.branch}&status=active&approvalStatus=approved`,
       )
       .then((r) =>
         setVendors(Array.isArray(r.data) ? r.data : r.data.vendors || []),

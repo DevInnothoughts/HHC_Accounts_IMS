@@ -14,7 +14,6 @@ import {
 
 const EXPENSE_TYPES = ["Revenue", "Capital"];
 
-
 const STEPS = [
   "Basic Info",
   "Financial Details",
@@ -126,7 +125,7 @@ export default function EditPaymentRequest() {
     if (!form?.branch) return;
     api
       .get(
-        `/vendors?branch=${form.branch}&status=active&approvalStatus=approved&limit=100`,
+        `/vendors/options?branch=${form.branch}&status=active&approvalStatus=approved`,
       )
       .then((r) =>
         setVendors(Array.isArray(r.data) ? r.data : r.data.vendors || []),
@@ -517,7 +516,6 @@ export default function EditPaymentRequest() {
                     ))}
                   </select>
                 </Field>
-
               </div>
             </div>
           )}

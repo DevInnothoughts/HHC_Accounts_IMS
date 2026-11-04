@@ -68,8 +68,10 @@ export default function CreatePaymentRequest() {
         setBranches(Array.isArray(r.data) ? r.data : r.data.branches || []),
       )
       .catch(console.error);
-    if (["branch_user", "accounts"].includes(user?.role) &&
-      user.branches?.length === 1) {
+    if (
+      ["branch_user", "accounts"].includes(user?.role) &&
+      user.branches?.length === 1
+    ) {
       setForm((f) => ({
         ...f,
         branch: user.branches[0]._id || user.branches[0],
@@ -81,7 +83,7 @@ export default function CreatePaymentRequest() {
     if (!form.branch) return;
     api
       .get(
-        `/vendors?branch=${form.branch}&status=active&approvalStatus=approved&limit=100`,
+        `/vendors/options?branch=${form.branch}&status=active&approvalStatus=approved`,
       )
       .then((r) =>
         setVendors(Array.isArray(r.data) ? r.data : r.data.vendors || []),
