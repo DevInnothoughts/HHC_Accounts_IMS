@@ -26,6 +26,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import SearchableSelect from "../components/SearchableSelect.jsx";
 import PanLookupGate from "../components/PanLookupGate.jsx";
+import MultiSearchableSelect from "../components/MultiSearchableSelect.jsx";
 import {
   VENDOR_TYPES,
   VENDOR_TYPE_OPTIONS,
@@ -104,7 +105,16 @@ export default function VendorForm() {
   const [chequeScanning, setChequeScanning] = useState(false);
   const [chequeError, setChequeError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // Multi-branch add (accounts only, Add Vendor only). selBranches is what
+  // is picked on the PAN step; targetBranches is fixed once a new master
+  // form starts; savedVendorIds are the branch rows created with it.
+  const [selBranches, setSelBranches] = useState([]);
+  const [targetBranches, setTargetBranches] = useState([]);
+  const [savedVendorIds, setSavedVendorIds] = useState([]);
   const chequeInputRef = useRef(null);
+
+  const canMultiBranch = !isEdit && user?.role === "accounts";
+  const isMultiNew = mode === "new-master" && targetBranches.length > 1;
 
   const singleBranchUser =
     user?.role === "branch_user" && user.branches?.length === 1;
@@ -211,7 +221,7 @@ export default function VendorForm() {
     const e = {};
     const profile = VENDOR_TYPES[form.vendorType] || VENDOR_TYPES.standard;
 
-    if (!form.branch) e.branch = "Branch is required";
+    if (!form.branch && !isMultiNew) e.branch = "Branch is required";
 
     if (mode !== "linked") {
       if (!form.vendorName?.trim()) e.vendorName = "Vendor name is required";
@@ -300,13 +310,21 @@ export default function VendorForm() {
     try {
       if (mode === "new-master") {
         if (!masterId) {
-          // One request creates the master AND this branch's vendor.
+          // One request creates the master AND this branch's vendor —
+          // or, for accounts adding to several branches, every branch's.
           const { data } = await api.post("/vendor-masters", {
             ...pick(MASTER_BODY_FIELDS),
-            branch: form.branch,
+            ...(isMultiNew
+              ? { branches: targetBranches }
+              : { branch: form.branch }),
           });
           setMasterId(idOf(data.master));
           setSavedVendorId(idOf(data.branchVendor));
+          setSavedVendorIds(
+            (data.branchVendors || [data.branchVendor])
+              .filter(Boolean)
+              .map(idOf),
+          );
           await refreshVendor(idOf(data.branchVendor));
         } else {
           // Still a draft: the creator may correct it (server enforces).
@@ -314,7 +332,13 @@ export default function VendorForm() {
             `/vendor-masters/${masterId}`,
             pick(MASTER_BODY_FIELDS),
           );
-          await api.put(`/vendors/${savedVendorId}`, pick(BRANCH_EDITABLE));
+          // Same branch-level fields on every row created with this master.
+          const rowIds = savedVendorIds.length
+            ? savedVendorIds
+            : [savedVendorId];
+          for (const rid of rowIds) {
+            await api.put(`/vendors/${rid}`, pick(BRANCH_EDITABLE));
+          }
           await refreshVendor();
         }
       } else if (mode === "linked") {
@@ -347,6 +371,8 @@ export default function VendorForm() {
           submit: `${d.message} Go back to Step 1 to add it to your branch instead.`,
           backToGate: true,
         });
+      } else if (d.code === "LOCAL_EXISTS" && adding && isMultiNew) {
+        setErrors({ submit: d.message, backToGate: true });
       } else {
         setErrors({ submit: d.message || "Save failed" });
       }
@@ -417,6 +443,7 @@ export default function VendorForm() {
 
   // ── Gate callbacks ──────────────────────────────────────
   const startNewMaster = (pan) => {
+    setTargetBranches(canMultiBranch ? selBranches : []);
     setForm((f) => ({ ...INIT, branch: f.branch, panNumber: pan }));
     setErrors({});
     setActiveSection(0);
@@ -511,6 +538,28 @@ export default function VendorForm() {
                 branch={form.branch}
                 onBranchChange={(v) => setField("branch", v)}
                 branchLocked={singleBranchUser}
+                multiBranch={canMultiBranch}
+                selectedBranches={selBranches}
+                onBranchesChange={(v) => {
+                  setSelBranches(v);
+                  // A single pick drives the existing one-branch flow.
+                  setField("branch", v[0] || "");
+                }}
+                onLinkedMulti={(data) => {
+                  const n = data.linked?.length || 0;
+                  const skip = data.skipped?.length || 0;
+                  const flash =
+                    `Vendor added to ${n} branch${n === 1 ? "" : "es"}` +
+                    (data.autoApproved
+                      ? " and ready for payment requests."
+                      : ". It becomes usable once the accounts team approves it.") +
+                    (skip
+                      ? ` ${skip} branch${skip === 1 ? " was" : "es were"} skipped (already had this vendor or a branch-level record).`
+                      : "");
+                  navigate(`/vendor-masters/${idOf(data.masterId)}`, {
+                    state: { flash },
+                  });
+                }}
                 onNewPan={startNewMaster}
                 onNoPan={startNoPan}
                 onOpenVendor={(vid) => navigate(`/vendors/${vid}`)}
@@ -624,6 +673,14 @@ export default function VendorForm() {
                       {form.panNumber}
                     </strong>
                     . Documents are uploaded once and shared by every branch.
+                    {isMultiNew && (
+                      <div style={{ marginTop: 4 }}>
+                        Being added to{" "}
+                        <strong>{targetBranches.length} branches</strong>. The
+                        GSTIN entered here is used for all of them — change it
+                        later on any branch invoiced from another state.
+                      </div>
+                    )}
                     {!masterId && (
                       <button style={S.inlineLink} onClick={backToGate}>
                         Change PAN
@@ -655,16 +712,29 @@ export default function VendorForm() {
                   <div>
                     <h2 style={S.sectionTitle}>👤 Personal Details</h2>
                     <div style={S.grid2}>
-                      <Field label="Branch *" error={errors.branch}>
-                        <SearchableSelect
-                          options={branches}
-                          value={form.branch}
-                          onChange={(val) => setField("branch", val)}
-                          getOptionLabel={(b) => `${b.name} (${b.code})`}
-                          placeholder="Select Branch"
-                          error={!!errors.branch}
-                          disabled={fieldDisabled("branch")}
-                        />
+                      <Field
+                        label={isMultiNew ? "Branches *" : "Branch *"}
+                        error={errors.branch}
+                      >
+                        {isMultiNew ? (
+                          <MultiSearchableSelect
+                            options={branches}
+                            value={targetBranches}
+                            onChange={() => {}}
+                            getOptionLabel={(b) => `${b.name} (${b.code})`}
+                            disabled
+                          />
+                        ) : (
+                          <SearchableSelect
+                            options={branches}
+                            value={form.branch}
+                            onChange={(val) => setField("branch", val)}
+                            getOptionLabel={(b) => `${b.name} (${b.code})`}
+                            placeholder="Select Branch"
+                            error={!!errors.branch}
+                            disabled={fieldDisabled("branch")}
+                          />
+                        )}
                       </Field>
                       <Field label="Vendor Name *" error={errors.vendorName}>
                         {input("vendorName", {

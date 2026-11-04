@@ -22,7 +22,9 @@ const lookupLimiter = rateLimit({
   keyGenerator: (req) => `pan-lookup:${req.user._id}`,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { message: "Too many PAN lookups. Please try again in a few minutes." },
+  message: {
+    message: "Too many PAN lookups. Please try again in a few minutes.",
+  },
 });
 
 // ── Static paths FIRST ────────────────────────────────────
@@ -91,6 +93,8 @@ router.post(
   roleGuard(BRANCH_USER, ACCOUNTS, SUPER_ADMIN),
   ctrl.linkMaster,
 );
+// Accounts only: add one master to several branches in one request.
+router.post("/:id/link-branches", roleGuard(ACCOUNTS), ctrl.linkMasterMulti);
 router.post(
   "/:id/attach",
   roleGuard(ACCOUNTS, SUPER_ADMIN),

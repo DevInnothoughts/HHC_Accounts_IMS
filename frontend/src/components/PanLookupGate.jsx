@@ -9,10 +9,23 @@
 //                              (approved master → usable immediately)
 //   PAN already in branch    → link to the existing vendor
 //   No PAN (utility/tax)     → onNoPan()           branch-level payee
+//
+// Multi-branch (accounts only, multiBranch=true): the Branch field is a
+// multi-select. With ONE branch picked everything works exactly as above.
+// With several:
+//   New PAN            → onNewPan(pan); the form creates the master and a
+//                        row for every selected branch (POST /vendor-masters
+//                        with `branches`).
+//   PAN in master      → per-branch table (GSTIN per branch, since GST is
+//                        per state) + "Add to N branches" →
+//                        POST /vendor-masters/:id/link-branches.
+//                        Branches that already have it are shown and skipped.
+//   No PAN             → one branch at a time (each payee is branch-level).
 // ============================================================
 import React, { useState } from "react";
 import api from "../api/axios";
 import SearchableSelect from "./SearchableSelect.jsx";
+import MultiSearchableSelect from "./MultiSearchableSelect.jsx";
 import {
   VENDOR_MASTER,
   APPROVAL_STATUS_STYLES,
@@ -34,13 +47,18 @@ const mask = (n) => (n ? `****${String(n).slice(-4)}` : "—");
 
 export default function PanLookupGate({
   branches = [],
-  branch,
+  branch: singleBranch,
   onBranchChange,
   branchLocked = false,
   onNewPan,
   onNoPan,
   onOpenVendor,
   onLinked,
+  // Multi-branch mode (accounts only)
+  multiBranch = false,
+  selectedBranches = [],
+  onBranchesChange,
+  onLinkedMulti,
 }) {
   const [pan, setPan] = useState("");
   const [checking, setChecking] = useState(false);
@@ -49,13 +67,24 @@ export default function PanLookupGate({
   const [linkGst, setLinkGst] = useState("");
   const [linkCategory, setLinkCategory] = useState("");
   const [linking, setLinking] = useState(false);
+  const [multiGst, setMultiGst] = useState({}); // branchId → GSTIN
 
   const panValid = VENDOR_MASTER.PAN_REGEX.test(pan);
+
+  // In multi-branch mode a single pick behaves exactly like the old flow.
+  const picked = selectedBranches.map(String);
+  const isMulti = multiBranch && picked.length > 1;
+  const branch = multiBranch
+    ? picked.length === 1
+      ? picked[0]
+      : ""
+    : singleBranch;
+  const hasBranch = multiBranch ? picked.length > 0 : Boolean(branch);
 
   const check = async () => {
     setError("");
     setResult(null);
-    if (!branch) {
+    if (!hasBranch) {
       setError("Select the branch first.");
       return;
     }
@@ -71,16 +100,23 @@ export default function PanLookupGate({
       setResult(data);
       setLinkGst(data.master?.gstNumber || "");
       setLinkCategory(data.master?.vendorCategory || "");
+      setMultiGst({});
     } catch (err) {
-      setError(err.response?.data?.message || "Could not check the PAN. Try again.");
+      setError(
+        err.response?.data?.message || "Could not check the PAN. Try again.",
+      );
     } finally {
       setChecking(false);
     }
   };
 
   // Everything below depends on WHICH branch the vendor is being added for.
-  const myLink = result?.myLinks?.find((l) => idOf(l.branch) === String(branch));
-  const myLocal = result?.localRows?.find((r) => idOf(r.branch) === String(branch));
+  const myLink = result?.myLinks?.find(
+    (l) => idOf(l.branch) === String(branch),
+  );
+  const myLocal = result?.localRows?.find(
+    (r) => idOf(r.branch) === String(branch),
+  );
   const branchName =
     branches.find((b) => idOf(b) === String(branch))?.name || "this branch";
 
@@ -114,37 +150,126 @@ export default function PanLookupGate({
     }
   };
 
+  // ── Multi-branch link ───────────────────────────────────
+  const nameOf = (bid) => {
+    const b = branches.find((x) => idOf(x) === String(bid));
+    return b ? `${b.name}${b.code ? ` (${b.code})` : ""}` : "Branch";
+  };
+  const multiRows = isMulti
+    ? picked.map((bid) => {
+        const linkRow = result?.myLinks?.find((l) => idOf(l.branch) === bid);
+        const localRow = result?.localRows?.find((r) => idOf(r.branch) === bid);
+        const gst = (
+          multiGst[bid] ??
+          result?.master?.gstNumber ??
+          ""
+        ).toUpperCase();
+        const err =
+          linkRow || localRow
+            ? ""
+            : gst && !VENDOR_MASTER.GST_REGEX.test(gst)
+              ? "Invalid GSTIN format"
+              : gst && !gstMatchesPan(gst, result?.pan)
+                ? "GSTIN does not belong to this PAN"
+                : "";
+        return { bid, linkRow, localRow, gst, err };
+      })
+    : [];
+  const addable = multiRows.filter((r) => !r.linkRow && !r.localRow);
+  const multiHasError = addable.some((r) => r.err);
+
+  const linkMulti = async () => {
+    if (!addable.length || multiHasError) return;
+    setLinking(true);
+    setError("");
+    try {
+      const { data } = await api.post(
+        `/vendor-masters/${result.master._id}/link-branches`,
+        {
+          items: addable.map((r) => ({
+            branch: r.bid,
+            gstNumber: r.gst,
+            vendorCategory: linkCategory,
+          })),
+        },
+      );
+      onLinkedMulti?.(data);
+    } catch (err) {
+      const d = err.response?.data || {};
+      if (d.problems?.length) {
+        setError(
+          d.problems
+            .map((p) => `${nameOf(p.branch)}: ${p.message}`)
+            .join(" · "),
+        );
+      } else if (d.skipped?.length) {
+        setError(
+          d.skipped.map((x) => `${nameOf(x.branch)}: ${x.message}`).join(" · "),
+        );
+      } else {
+        setError(d.message || "Could not add the vendor to the branches.");
+      }
+    } finally {
+      setLinking(false);
+    }
+  };
+
   const m = result?.master;
-  const ap = m ? APPROVAL_STATUS_STYLES[m.approvalStatus] || APPROVAL_STATUS_STYLES.draft : null;
+  const ap = m
+    ? APPROVAL_STATUS_STYLES[m.approvalStatus] || APPROVAL_STATUS_STYLES.draft
+    : null;
 
   return (
     <div>
       <h2 style={S.title}>Step 1 — Check the vendor's PAN</h2>
       <p style={S.lead}>
         A vendor is registered once for the whole group. If another branch
-        already uses it, you can add it here without uploading documents
-        again.
+        already uses it, you can add it here without uploading documents again.
       </p>
 
       <div style={S.row}>
         <div style={{ flex: "1 1 220px" }}>
-          <label style={S.label}>Branch *</label>
-          <SearchableSelect
-            options={branches}
-            value={branch}
-            onChange={(v) => {
-              onBranchChange?.(v);
-              setError("");
-            }}
-            getOptionLabel={(b) => `${b.name}${b.code ? ` (${b.code})` : ""}`}
-            placeholder="Select Branch"
-            disabled={branchLocked}
-          />
+          <label style={S.label}>
+            {multiBranch ? "Branches *" : "Branch *"}
+          </label>
+          {multiBranch ? (
+            <MultiSearchableSelect
+              options={branches}
+              value={picked}
+              onChange={(v) => {
+                onBranchesChange?.(v);
+                setError("");
+              }}
+              getOptionLabel={(b) => `${b.name}${b.code ? ` (${b.code})` : ""}`}
+              placeholder="Select one or more branches"
+            />
+          ) : (
+            <SearchableSelect
+              options={branches}
+              value={branch}
+              onChange={(v) => {
+                onBranchChange?.(v);
+                setError("");
+              }}
+              getOptionLabel={(b) => `${b.name}${b.code ? ` (${b.code})` : ""}`}
+              placeholder="Select Branch"
+              disabled={branchLocked}
+            />
+          )}
+          {multiBranch && (
+            <span style={S.hint}>
+              You can add the vendor to several branches at once.
+            </span>
+          )}
         </div>
         <div style={{ flex: "1 1 220px" }}>
           <label style={S.label}>PAN *</label>
           <input
-            style={{ ...S.input, fontFamily: "monospace", textTransform: "uppercase" }}
+            style={{
+              ...S.input,
+              fontFamily: "monospace",
+              textTransform: "uppercase",
+            }}
             value={pan}
             maxLength={10}
             placeholder="ABCDE1234F"
@@ -159,8 +284,11 @@ export default function PanLookupGate({
         </div>
         <div style={{ alignSelf: "flex-end" }}>
           <button
-            style={{ ...S.primaryBtn, opacity: checking || !panValid || !branch ? 0.55 : 1 }}
-            disabled={checking || !panValid || !branch}
+            style={{
+              ...S.primaryBtn,
+              opacity: checking || !panValid || !hasBranch ? 0.55 : 1,
+            }}
+            disabled={checking || !panValid || !hasBranch}
             onClick={check}
           >
             {checking ? "Checking…" : "Check PAN"}
@@ -169,9 +297,18 @@ export default function PanLookupGate({
       </div>
 
       <button
-        style={{ ...S.linkBtn, ...(!branch ? { color: "#94a3b8", cursor: "not-allowed" } : {}) }}
+        style={{
+          ...S.linkBtn,
+          ...(!branch ? { color: "#94a3b8", cursor: "not-allowed" } : {}),
+        }}
         disabled={!branch}
-        title={!branch ? "Select the branch first" : ""}
+        title={
+          isMulti
+            ? "A payee without a PAN is added to one branch at a time — select a single branch"
+            : !branch
+              ? "Select the branch first"
+              : ""
+        }
         onClick={() => onNoPan?.()}
       >
         This payee has no PAN (electricity board, municipal tax, government
@@ -182,14 +319,169 @@ export default function PanLookupGate({
 
       {result && (
         <div style={{ marginTop: 20 }}>
-          {/* ── Already in this branch ───────────────────── */}
-          {myLink ? (
+          {isMulti && result.found && result.canLink ? (
+            /* ── Multi-branch: existing master → several branches ── */
+            <div style={S.card}>
+              <div style={S.cardHead}>
+                <div>
+                  <div style={S.cardName}>{m.vendorName}</div>
+                  <div style={S.cardSub}>
+                    {m.companyName || m.vendorCategory || "—"} · PAN{" "}
+                    <span style={{ fontFamily: "monospace" }}>
+                      {result.pan}
+                    </span>
+                    {" · "}Bank {m.bankName || "—"}{" "}
+                    {m.accountNumberMasked || mask(m.accountNumber)}
+                  </div>
+                </div>
+                <span
+                  style={{ ...S.badge, background: ap.bg, color: ap.color }}
+                >
+                  {ap.label}
+                </span>
+              </div>
+
+              <div style={S.tableWrap}>
+                <table style={S.table}>
+                  <thead>
+                    <tr>
+                      <th style={S.th}>Branch</th>
+                      <th style={S.th}>GSTIN for this branch</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {multiRows.map((r) => (
+                      <tr key={r.bid}>
+                        <td style={S.td}>{nameOf(r.bid)}</td>
+                        <td style={S.td}>
+                          {r.linkRow ? (
+                            <span style={S.skipNote}>
+                              Already in this branch —{" "}
+                              <button
+                                style={S.inlineLink}
+                                onClick={() => onOpenVendor?.(r.linkRow._id)}
+                              >
+                                open
+                              </button>
+                            </span>
+                          ) : r.localRow ? (
+                            <span style={S.skipNote}>
+                              Has a branch-level record with this PAN — will be
+                              skipped (attach it from the Vendor Master)
+                            </span>
+                          ) : (
+                            <>
+                              <input
+                                style={{
+                                  ...S.input,
+                                  padding: "7px 10px",
+                                  fontSize: 13,
+                                  fontFamily: "monospace",
+                                  textTransform: "uppercase",
+                                  ...(r.err ? S.inputError : {}),
+                                }}
+                                value={r.gst}
+                                maxLength={15}
+                                placeholder="Blank if not GST-registered"
+                                onChange={(e) =>
+                                  setMultiGst((g) => ({
+                                    ...g,
+                                    [r.bid]: e.target.value.toUpperCase(),
+                                  }))
+                                }
+                              />
+                              {(r.err || (r.gst && gstState(r.gst))) && (
+                                <span
+                                  style={{
+                                    ...S.hint,
+                                    ...(r.err ? { color: "#dc2626" } : {}),
+                                  }}
+                                >
+                                  {r.err || `${gstState(r.gst)} registration`}
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div style={{ ...S.row, marginTop: 16 }}>
+                <div style={{ flex: "1 1 220px", maxWidth: 360 }}>
+                  <label style={S.label}>
+                    Category (all selected branches)
+                  </label>
+                  <SearchableSelect
+                    options={VENDOR_CATEGORIES}
+                    value={linkCategory}
+                    onChange={setLinkCategory}
+                    getOptionValue={(c) => c}
+                    getOptionLabel={(c) => c}
+                    placeholder="Select (optional)"
+                  />
+                </div>
+              </div>
+
+              <div style={S.cardFoot}>
+                <span style={S.hint}>
+                  {addable.length === 0
+                    ? "Every selected branch already has this vendor."
+                    : result.autoApproveOnLink
+                      ? "Already approved by the accounts team — it will be ready for payment requests in these branches immediately."
+                      : "This vendor is still awaiting accounts approval. It becomes usable in these branches as soon as it is approved."}
+                </span>
+                <button
+                  style={{
+                    ...S.addBtn,
+                    opacity:
+                      linking || multiHasError || !addable.length ? 0.55 : 1,
+                  }}
+                  disabled={linking || multiHasError || !addable.length}
+                  onClick={linkMulti}
+                >
+                  {linking
+                    ? "Adding…"
+                    : `+ Add to ${addable.length} branch${addable.length === 1 ? "" : "es"}`}
+                </button>
+              </div>
+            </div>
+          ) : isMulti && !result.found ? (
+            <div style={S.successBox}>
+              <div>
+                <strong>New vendor.</strong> PAN {result.pan} is not registered
+                in the group yet. Enter the details and documents once; the
+                vendor is created for all {picked.length} selected branches and
+                the accounts team approves it once.
+              </div>
+              <button
+                style={S.primaryBtn}
+                onClick={() => onNewPan?.(result.pan)}
+              >
+                Continue to vendor details →
+              </button>
+            </div>
+          ) : isMulti && !result.canLink ? (
+            <div style={S.warnBox}>
+              <div>
+                <strong>{m?.vendorName}</strong> (PAN {result.pan}) is already
+                registered, but it can't be added right now.
+                <div style={{ marginTop: 4 }}>{result.cannotLinkReason}</div>
+              </div>
+            </div>
+          ) : /* ── Already in this branch ───────────────────── */
+          myLink ? (
             <div style={S.infoBox}>
               <div>
                 <strong>{m?.vendorName}</strong> is already in {branchName}'s
                 vendor list.
               </div>
-              <button style={S.primaryBtn} onClick={() => onOpenVendor?.(myLink._id)}>
+              <button
+                style={S.primaryBtn}
+                onClick={() => onOpenVendor?.(myLink._id)}
+              >
                 Open vendor →
               </button>
             </div>
@@ -198,10 +490,13 @@ export default function PanLookupGate({
             <div style={S.warnBox}>
               <div>
                 {branchName} already has <strong>{myLocal.vendorName}</strong>{" "}
-                with this PAN as a branch record. Use that one — the
-                accounts team can connect it to the Vendor Master.
+                with this PAN as a branch record. Use that one — the accounts
+                team can connect it to the Vendor Master.
               </div>
-              <button style={S.secondaryBtn} onClick={() => onOpenVendor?.(myLocal._id)}>
+              <button
+                style={S.secondaryBtn}
+                onClick={() => onOpenVendor?.(myLocal._id)}
+              >
                 Open it
               </button>
             </div>
@@ -213,7 +508,10 @@ export default function PanLookupGate({
                 in the group yet. Enter the details and documents; the accounts
                 team approves it once for every branch.
               </div>
-              <button style={S.primaryBtn} onClick={() => onNewPan?.(result.pan)}>
+              <button
+                style={S.primaryBtn}
+                onClick={() => onNewPan?.(result.pan)}
+              >
                 Continue to vendor details →
               </button>
             </div>
@@ -234,10 +532,14 @@ export default function PanLookupGate({
                   <div style={S.cardName}>{m.vendorName}</div>
                   <div style={S.cardSub}>
                     {m.companyName || m.vendorCategory || "—"} · PAN{" "}
-                    <span style={{ fontFamily: "monospace" }}>{result.pan}</span>
+                    <span style={{ fontFamily: "monospace" }}>
+                      {result.pan}
+                    </span>
                   </div>
                 </div>
-                <span style={{ ...S.badge, background: ap.bg, color: ap.color }}>
+                <span
+                  style={{ ...S.badge, background: ap.bg, color: ap.color }}
+                >
                   {ap.label}
                 </span>
               </div>
@@ -278,7 +580,12 @@ export default function PanLookupGate({
                     placeholder="Leave blank if not GST-registered"
                     onChange={(e) => setLinkGst(e.target.value.toUpperCase())}
                   />
-                  <span style={{ ...S.hint, ...(gstError ? { color: "#dc2626" } : {}) }}>
+                  <span
+                    style={{
+                      ...S.hint,
+                      ...(gstError ? { color: "#dc2626" } : {}),
+                    }}
+                  >
                     {gstError ||
                       (linkGst && gstState(linkGst)
                         ? `${gstState(linkGst)} registration. Change it if this branch is invoiced from another state.`
@@ -305,7 +612,10 @@ export default function PanLookupGate({
                     : "This vendor is still awaiting accounts approval. It becomes usable in your branch as soon as it is approved."}
                 </span>
                 <button
-                  style={{ ...S.addBtn, opacity: linking || gstError ? 0.55 : 1 }}
+                  style={{
+                    ...S.addBtn,
+                    opacity: linking || gstError ? 0.55 : 1,
+                  }}
                   disabled={linking || Boolean(gstError)}
                   onClick={link}
                 >
@@ -322,7 +632,9 @@ export default function PanLookupGate({
 
 const Info = ({ label, value, mono, full }) => (
   <div style={{ gridColumn: full ? "1 / -1" : undefined }}>
-    <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2 }}>{label}</div>
+    <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2 }}>
+      {label}
+    </div>
     <div
       style={{
         fontSize: 13,
@@ -341,7 +653,13 @@ const S = {
   title: { fontSize: 16, fontWeight: 700, color: C.primary, margin: "0 0 6px" },
   lead: { fontSize: 13, color: "#64748b", margin: "0 0 18px", lineHeight: 1.5 },
   row: { display: "flex", gap: 14, flexWrap: "wrap", alignItems: "flex-start" },
-  label: { display: "block", fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 6 },
+  label: {
+    display: "block",
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#475569",
+    marginBottom: 6,
+  },
   input: {
     padding: "10px 13px",
     border: `1.5px solid ${C.border}`,
@@ -473,6 +791,36 @@ const S = {
     gap: 14,
   },
   divider: { borderTop: "1px solid #f1f5f9", margin: "18px 0" },
+  tableWrap: {
+    overflowX: "auto",
+    border: `1px solid ${C.border}`,
+    borderRadius: 8,
+  },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
+  th: {
+    textAlign: "left",
+    padding: "9px 12px",
+    background: "#f8fafc",
+    color: "#475569",
+    fontWeight: 600,
+    borderBottom: `1px solid ${C.border}`,
+  },
+  td: {
+    padding: "8px 12px",
+    borderBottom: "1px solid #f1f5f9",
+    verticalAlign: "top",
+    color: "#1e293b",
+  },
+  skipNote: { fontSize: 12, color: "#92400e" },
+  inlineLink: {
+    background: "none",
+    border: "none",
+    color: C.accent,
+    fontSize: 12,
+    cursor: "pointer",
+    padding: 0,
+    textDecoration: "underline",
+  },
   cardFoot: {
     display: "flex",
     justifyContent: "space-between",

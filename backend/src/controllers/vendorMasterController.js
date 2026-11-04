@@ -63,6 +63,25 @@ const pick = (src, keys) => {
   return out;
 };
 
+// ── Multi-branch add (accounts only) ──────────────────────
+// The accounts team may add a vendor to several branches in one go, both
+// when registering a new PAN (createMaster) and when adding an existing
+// master (linkMasterMulti). Every other role keeps the one-branch flow.
+const MULTI_BRANCH_MAX = 100;
+const canAddMultiBranch = (req) => req.user?.role === ROLES.ACCOUNTS;
+
+// Unique, valid branch ids from a body array. Returns null if malformed.
+const branchIdList = (raw) => {
+  if (!Array.isArray(raw)) return null;
+  const ids = [];
+  for (const v of raw) {
+    const id = typeof v === "string" ? v.trim() : "";
+    if (!id || !validId(id)) return null;
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids;
+};
+
 const sendError = (res, err, context) => {
   if (err?.name === "ValidationError") {
     return res.status(400).json({
@@ -431,34 +450,65 @@ exports.createMaster = async (req, res) => {
       });
     }
 
-    const branchId = access.qstr(req.body.branch);
+    // Branches this vendor is being added for. Accounts may send
+    // body.branches (several branches at once); everyone else sends the
+    // single body.branch exactly as before.
+    let branchIds = [];
+    if (req.body.branches !== undefined) {
+      if (!canAddMultiBranch(req))
+        return res.status(403).json({
+          message:
+            "Only the accounts team can add a vendor to several branches at once.",
+        });
+      branchIds = branchIdList(req.body.branches);
+      if (!branchIds)
+        return res.status(400).json({ message: "Invalid branch list" });
+      if (branchIds.length > MULTI_BRANCH_MAX)
+        return res.status(400).json({
+          message: `Select at most ${MULTI_BRANCH_MAX} branches at a time.`,
+        });
+    } else {
+      const one = access.qstr(req.body.branch);
+      if (one) {
+        if (!validId(one))
+          return res.status(400).json({ message: "Invalid branch" });
+        branchIds = [one];
+      }
+    }
+
     // A branch user registers a vendor FOR their branch. Without one the
     // master would be an orphan draft nobody else can reach or submit.
-    if (!branchId && !access.isMasterAdmin(req)) {
+    if (!branchIds.length && !access.isMasterAdmin(req)) {
       return res
         .status(400)
         .json({ message: "Select the branch this vendor is being added for" });
     }
-    if (branchId) {
-      if (!validId(branchId))
-        return res.status(400).json({ message: "Invalid branch" });
-      if (!access.canAccessBranchForMaster(req, branchId))
-        return res
-          .status(403)
-          .json({ message: "You can only add vendors to your own branch" });
+    if (branchIds.some((b) => !access.canAccessBranchForMaster(req, b)))
+      return res
+        .status(403)
+        .json({ message: "You can only add vendors to your own branch" });
 
-      const local = await Vendor.findOne({
+    if (branchIds.length) {
+      const locals = await Vendor.find({
         vendorMaster: null,
-        branch: branchId,
+        branch: { $in: branchIds },
         panNumber: pan,
       })
-        .select("_id vendorName")
+        .select("_id vendorName branch")
+        .populate("branch", "name")
         .lean();
-      if (local) {
+      if (locals.length) {
+        const where = locals
+          .map((l) => l.branch?.name || "a branch")
+          .join(", ");
         return res.status(409).json({
           code: "LOCAL_EXISTS",
-          vendorId: local._id,
-          message: `This branch already has ${local.vendorName} (PAN ${pan}) as a branch-level vendor. Ask the accounts team to move it into the Vendor Master instead of adding it again.`,
+          vendorId: locals[0]._id,
+          branches: locals.map((l) => String(l.branch?._id || l.branch)),
+          message:
+            branchIds.length > 1
+              ? `${where} already ${locals.length > 1 ? "have" : "has"} this PAN as a branch-level vendor. Deselect ${locals.length > 1 ? "those branches" : "that branch"} and attach the existing record${locals.length > 1 ? "s" : ""} from the Vendor Master instead.`
+              : `This branch already has ${locals[0].vendorName} (PAN ${pan}) as a branch-level vendor. Ask the accounts team to move it into the Vendor Master instead of adding it again.`,
         });
       }
     }
@@ -471,24 +521,33 @@ exports.createMaster = async (req, res) => {
       linkedBranchCount: 0,
     });
 
-    let branchVendor = null;
-    if (branchId) {
+    const branchVendors = [];
+    if (branchIds.length) {
       try {
-        branchVendor = await Vendor.create(
-          svc.buildBranchRow(master, {
-            branch: branchId,
-            vendorCategory: data.vendorCategory,
-            createdBy: req.user._id,
-            approvalStatus: "draft",
-          }),
-        );
+        for (const b of branchIds) {
+          branchVendors.push(
+            await Vendor.create(
+              svc.buildBranchRow(master, {
+                branch: b,
+                vendorCategory: data.vendorCategory,
+                createdBy: req.user._id,
+                approvalStatus: "draft",
+              }),
+            ),
+          );
+        }
       } catch (e) {
-        // Compensate rather than leave a master nobody can reach.
+        // Compensate rather than leave a half-created vendor: only the
+        // records this same request just created are removed.
+        await Vendor.deleteMany({
+          _id: { $in: branchVendors.map((v) => v._id) },
+        }).catch(() => {});
         await VendorMaster.deleteOne({ _id: master._id }).catch(() => {});
         throw e;
       }
       await svc.recountLinks(master._id);
     }
+    const branchVendor = branchVendors[0] || null;
 
     await logAction({
       userId: req.user._id,
@@ -496,16 +555,21 @@ exports.createMaster = async (req, res) => {
       module: "VendorMaster",
       targetDoc: master,
       statusTo: "draft",
+      newValue: branchIds.length > 1 ? { branches: branchIds } : undefined,
       req,
     });
-    if (branchVendor) {
+    for (const bv of branchVendors) {
       await logAction({
         userId: req.user._id,
         action: "CREATE_VENDOR",
         module: "Vendor",
-        targetDoc: branchVendor,
+        targetDoc: bv,
+        branch: bv.branch,
         statusTo: "draft",
-        reason: "Created together with a new vendor master",
+        reason:
+          branchVendors.length > 1
+            ? `Created together with a new vendor master (${branchVendors.length} branches)`
+            : "Created together with a new vendor master",
         req,
       });
     }
@@ -518,7 +582,12 @@ exports.createMaster = async (req, res) => {
       panNumber: pan,
     });
 
-    res.status(201).json({ master, branchVendor, unlinkedLocalCount });
+    res.status(201).json({
+      master,
+      branchVendor,
+      branchVendors,
+      unlinkedLocalCount,
+    });
   } catch (err) {
     sendError(res, err, "Failed to create vendor master");
   }
@@ -997,10 +1066,150 @@ exports.updateMasterStatus = async (req, res) => {
 // ════════════════════════════════════════════════════════════
 // LINK — "Add to my branch" (requirement 4)
 // ════════════════════════════════════════════════════════════
+// Adds ONE branch to an already-loaded master. Shared by linkMaster
+// (single branch, any permitted role) and linkMasterMulti (accounts).
+// Returns { vendor, auto } on success, or { error: {status, code, message,
+// vendorId} } when this branch cannot be added. Never throws for an
+// expected refusal, so the multi-branch caller can skip and continue.
+// Does NOT recount, sync, or notify — callers do that once at the end.
+const linkOneBranch = async (
+  master,
+  branchId,
+  { gstNumber, vendorCategory },
+  req,
+) => {
+  if (!access.canAccessBranchForMaster(req, branchId))
+    return {
+      error: {
+        status: 403,
+        message: "You can only add vendors to your own branch",
+      },
+    };
+
+  // GST is per state: the branch gives the GSTIN it is invoiced under.
+  // Absent → start from the master's primary GSTIN; "" → none.
+  const gstErr = svc.gstError(gstNumber, master.panNumber);
+  if (gstErr) return { error: { status: 400, code: "GST", message: gstErr } };
+
+  const already = await Vendor.findOne({
+    vendorMaster: master._id,
+    branch: branchId,
+  })
+    .select("_id")
+    .lean();
+  if (already) {
+    return {
+      error: {
+        status: 409,
+        code: "ALREADY_LINKED",
+        vendorId: already._id,
+        message: "This vendor is already in this branch's vendor list.",
+      },
+    };
+  }
+
+  const local = await Vendor.findOne({
+    vendorMaster: null,
+    branch: branchId,
+    panNumber: master.panNumber,
+  })
+    .select("_id vendorName")
+    .lean();
+  if (local) {
+    return {
+      error: {
+        status: 409,
+        code: "LOCAL_EXISTS",
+        vendorId: local._id,
+        message: `This branch already has ${local.vendorName} as a branch-level vendor. Ask the accounts team to attach it to the Vendor Master instead of adding it again.`,
+      },
+    };
+  }
+
+  // Decided: a link to an ALREADY-APPROVED master needs no second
+  // approval. The KYC review happened once, at master level.
+  const auto =
+    master.approvalStatus === "approved" &&
+    VENDOR_MASTER.autoApproveLinkToApprovedMaster;
+  const now = new Date();
+
+  let vendor;
+  try {
+    vendor = await Vendor.create(
+      svc.buildBranchRow(master, {
+        branch: branchId,
+        vendorCategory,
+        createdBy: req.user._id,
+        approvalStatus: auto ? "approved" : "pending_approval",
+        // Credit the approval to whoever approved the KYC, not to the
+        // branch user who clicked "Add to my branch".
+        approvedBy: auto ? master.approvedBy : null,
+        approvedAt: auto ? now : null,
+        verifiedByAccounts: auto,
+        gstNumber,
+      }),
+    );
+  } catch (e) {
+    if (e?.code === 11000) {
+      return {
+        error: {
+          status: 409,
+          code: "ALREADY_LINKED",
+          message: "This vendor is already in this branch's vendor list.",
+        },
+      };
+    }
+    throw e;
+  }
+
+  await logAction({
+    userId: req.user._id,
+    action: "LINK_VENDOR_MASTER",
+    module: "VendorMaster",
+    targetDoc: master,
+    branch: branchId,
+    newValue: { branchVendorId: vendor._id, autoApproved: auto },
+    req,
+  });
+  await logAction({
+    userId: req.user._id,
+    action: "CREATE_VENDOR",
+    module: "Vendor",
+    targetDoc: vendor,
+    statusTo: vendor.approvalStatus,
+    reason: auto
+      ? "Linked from an approved vendor master — auto-approved"
+      : "Linked from vendor master — awaiting accounts approval",
+    req,
+  });
+
+  return { vendor, auto };
+};
+
+const linkNotice = (master) =>
+  `<p>A branch has added <strong>${escapeHtml(master.vendorName)}</strong> (PAN ${escapeHtml(
+    master.panNumber,
+  )}) from the Vendor Master and it is awaiting your approval.</p>`;
+
+// Loads the master and checks it can be linked at all. Returns
+// { master } or { error } in the same shape as linkOneBranch.
+const loadLinkableMaster = async (id, req) => {
+  if (!validId(id))
+    return { error: { status: 400, message: "Invalid vendor master id" } };
+  const master = await VendorMaster.findById(id);
+  if (!master)
+    return { error: { status: 404, message: "Vendor master not found" } };
+  const reason = cannotLinkReason(master, req);
+  if (reason)
+    return { error: { status: 409, code: "CANNOT_LINK", message: reason } };
+  return { master };
+};
+
+const sendLinkError = (res, { status, code, message, vendorId }) =>
+  res.status(status).json({ code, message, vendorId });
+
 exports.linkMaster = async (req, res) => {
   try {
-    if (!validId(req.params.id))
-      return res.status(400).json({ message: "Invalid vendor master id" });
     const branchId = access.qstr(req.body.branch);
     if (!branchId || !validId(branchId))
       return res.status(400).json({ message: "Select a branch" });
@@ -1010,121 +1219,150 @@ exports.linkMaster = async (req, res) => {
         .status(403)
         .json({ message: "You can only add vendors to your own branch" });
 
-    const master = await VendorMaster.findById(req.params.id);
-    if (!master)
-      return res.status(404).json({ message: "Vendor master not found" });
+    const loaded = await loadLinkableMaster(req.params.id, req);
+    if (loaded.error) return sendLinkError(res, loaded.error);
+    const { master } = loaded;
 
-    const reason = cannotLinkReason(master, req);
-    if (reason)
-      return res.status(409).json({ code: "CANNOT_LINK", message: reason });
+    const result = await linkOneBranch(
+      master,
+      branchId,
+      {
+        gstNumber:
+          typeof req.body.gstNumber === "string"
+            ? req.body.gstNumber
+            : undefined,
+        vendorCategory: access.qstr(req.body.vendorCategory),
+      },
+      req,
+    );
+    if (result.error) return sendLinkError(res, result.error);
 
-    // GST is per state: the branch gives the GSTIN it is invoiced under.
-    // Absent → start from the master's primary GSTIN; "" → none.
-    const branchGst =
-      typeof req.body.gstNumber === "string" ? req.body.gstNumber : undefined;
-    const gstErr = svc.gstError(branchGst, master.panNumber);
-    if (gstErr) return res.status(400).json({ message: gstErr });
-
-    const already = await Vendor.findOne({
-      vendorMaster: master._id,
-      branch: branchId,
-    })
-      .select("_id")
-      .lean();
-    if (already) {
-      return res.status(409).json({
-        code: "ALREADY_LINKED",
-        vendorId: already._id,
-        message: "This vendor is already in this branch's vendor list.",
-      });
-    }
-
-    const local = await Vendor.findOne({
-      vendorMaster: null,
-      branch: branchId,
-      panNumber: master.panNumber,
-    })
-      .select("_id vendorName")
-      .lean();
-    if (local) {
-      return res.status(409).json({
-        code: "LOCAL_EXISTS",
-        vendorId: local._id,
-        message: `This branch already has ${local.vendorName} as a branch-level vendor. Ask the accounts team to attach it to the Vendor Master instead of adding it again.`,
-      });
-    }
-
-    // Decided: a link to an ALREADY-APPROVED master needs no second
-    // approval. The KYC review happened once, at master level.
-    const auto =
-      master.approvalStatus === "approved" &&
-      VENDOR_MASTER.autoApproveLinkToApprovedMaster;
-    const now = new Date();
-
-    let vendor;
-    try {
-      vendor = await Vendor.create(
-        svc.buildBranchRow(master, {
-          branch: branchId,
-          vendorCategory: access.qstr(req.body.vendorCategory),
-          createdBy: req.user._id,
-          approvalStatus: auto ? "approved" : "pending_approval",
-          // Credit the approval to whoever approved the KYC, not to the
-          // branch user who clicked "Add to my branch".
-          approvedBy: auto ? master.approvedBy : null,
-          approvedAt: auto ? now : null,
-          verifiedByAccounts: auto,
-          gstNumber: branchGst,
-        }),
-      );
-    } catch (e) {
-      if (e?.code === 11000) {
-        return res.status(409).json({
-          code: "ALREADY_LINKED",
-          message: "This vendor is already in this branch's vendor list.",
-        });
-      }
-      throw e;
-    }
     await svc.recountLinks(master._id);
     // Closes the window where the master was edited between our read and
     // Vendor.create: the new row converges on the master's current values.
     await svc.syncMasterToBranchVendors(master._id, req, "Linked to branch");
 
-    await logAction({
-      userId: req.user._id,
-      action: "LINK_VENDOR_MASTER",
-      module: "VendorMaster",
-      targetDoc: master,
-      branch: branchId,
-      newValue: { branchVendorId: vendor._id, autoApproved: auto },
-      req,
-    });
-    await logAction({
-      userId: req.user._id,
-      action: "CREATE_VENDOR",
-      module: "Vendor",
-      targetDoc: vendor,
-      statusTo: vendor.approvalStatus,
-      reason: auto
-        ? "Linked from an approved vendor master — auto-approved"
-        : "Linked from vendor master — awaiting accounts approval",
-      req,
-    });
-
-    if (!auto) {
+    if (!result.auto) {
       await notifyAccounts(
         [branchId],
         `🆕 Vendor Pending Approval: ${master.vendorName}`,
-        `<p>A branch has added <strong>${escapeHtml(master.vendorName)}</strong> (PAN ${escapeHtml(
-          master.panNumber,
-        )}) from the Vendor Master and it is awaiting your approval.</p>`,
+        linkNotice(master),
       );
     }
 
-    res.status(201).json({ vendor, autoApproved: auto });
+    res.status(201).json({ vendor: result.vendor, autoApproved: result.auto });
   } catch (err) {
     sendError(res, err, "Failed to add vendor to branch");
+  }
+};
+
+// ════════════════════════════════════════════════════════════
+// LINK TO SEVERAL BRANCHES — accounts only
+// ════════════════════════════════════════════════════════════
+// Body: { items: [{ branch, gstNumber?, vendorCategory? }, …] }
+//   gstNumber: string → that branch's GSTIN ("" = none);
+//              absent → the master's primary GSTIN (same as linkMaster).
+// Each branch is added independently: a branch that already has the
+// vendor (or a branch-level record with this PAN) is skipped and
+// reported, the rest are added. Nothing already in the database changes.
+exports.linkMasterMulti = async (req, res) => {
+  try {
+    if (!canAddMultiBranch(req))
+      return res.status(403).json({
+        message:
+          "Only the accounts team can add a vendor to several branches at once.",
+      });
+
+    const items = Array.isArray(req.body.items) ? req.body.items : null;
+    if (!items || !items.length)
+      return res.status(400).json({ message: "Select at least one branch" });
+    if (items.length > MULTI_BRANCH_MAX)
+      return res.status(400).json({
+        message: `Select at most ${MULTI_BRANCH_MAX} branches at a time.`,
+      });
+    const ids = branchIdList(items.map((i) => i && i.branch));
+    if (!ids || ids.length !== items.length)
+      return res
+        .status(400)
+        .json({ message: "Invalid or repeated branch in the list" });
+
+    const loaded = await loadLinkableMaster(req.params.id, req);
+    if (loaded.error) return sendLinkError(res, loaded.error);
+    const { master } = loaded;
+
+    // Validate every GSTIN first, so a typo doesn't leave half the
+    // branches added and the rest not.
+    const gstProblems = items
+      .map((i) => ({
+        branch: String(i.branch),
+        message:
+          typeof i.gstNumber === "string"
+            ? svc.gstError(i.gstNumber, master.panNumber)
+            : null,
+      }))
+      .filter((p) => p.message);
+    if (gstProblems.length)
+      return res.status(400).json({
+        code: "GST",
+        message: gstProblems[0].message,
+        problems: gstProblems,
+      });
+
+    const linked = [];
+    const skipped = [];
+    for (const i of items) {
+      const branchId = String(i.branch);
+      const r = await linkOneBranch(
+        master,
+        branchId,
+        {
+          gstNumber: typeof i.gstNumber === "string" ? i.gstNumber : undefined,
+          vendorCategory: access.qstr(i.vendorCategory),
+        },
+        req,
+      );
+      if (r.error) {
+        skipped.push({
+          branch: branchId,
+          code: r.error.code,
+          vendorId: r.error.vendorId,
+          message: r.error.message,
+        });
+      } else {
+        linked.push({ branch: branchId, vendor: r.vendor, auto: r.auto });
+      }
+    }
+
+    if (linked.length) {
+      await svc.recountLinks(master._id);
+      await svc.syncMasterToBranchVendors(master._id, req, "Linked to branch");
+      const pending = linked.filter((l) => !l.auto).map((l) => l.branch);
+      if (pending.length) {
+        await notifyAccounts(
+          pending,
+          `🆕 Vendor Pending Approval: ${master.vendorName}`,
+          linkNotice(master),
+        );
+      }
+    }
+
+    res.status(linked.length ? 201 : 409).json({
+      masterId: master._id,
+      autoApproved:
+        master.approvalStatus === "approved" &&
+        VENDOR_MASTER.autoApproveLinkToApprovedMaster,
+      linked: linked.map((l) => ({
+        branch: l.branch,
+        vendorId: l.vendor._id,
+        approvalStatus: l.vendor.approvalStatus,
+      })),
+      skipped,
+      message: linked.length
+        ? undefined
+        : "None of the selected branches could be added.",
+    });
+  } catch (err) {
+    sendError(res, err, "Failed to add vendor to branches");
   }
 };
 
