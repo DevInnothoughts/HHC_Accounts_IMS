@@ -430,7 +430,13 @@ export default function PaymentDetail() {
                 label="UTR Number"
                 mono
                 value={
-                  <span style={{ display: "inline-flex", gap: 8, alignItems: "center" }}>
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      gap: 8,
+                      alignItems: "center",
+                    }}
+                  >
                     {payment.utrNumber}
                     {isSuperAdmin && (
                       <button
@@ -441,8 +447,11 @@ export default function PaymentDetail() {
                           openUtrFix({
                             installmentRef: latestUtrInstallment?.paymentId,
                             label:
-                              latestUtrInstallment?.paymentId || payment.paymentId,
-                            current: latestUtrInstallment?.utrNumber || payment.utrNumber,
+                              latestUtrInstallment?.paymentId ||
+                              payment.paymentId,
+                            current:
+                              latestUtrInstallment?.utrNumber ||
+                              payment.utrNumber,
                           })
                         }
                       >
@@ -485,6 +494,14 @@ export default function PaymentDetail() {
             <InfoRow
               label="Round Off"
               value={`${(invoice?.roundOff || 0) < 0 ? "− " : "+ "}₹${Math.abs(invoice?.roundOff || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+            />
+            <InfoRow
+              label="Special Discount"
+              value={`− ₹${Number(invoice?.specialDiscount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+            />
+            <InfoRow
+              label="Cash Discount"
+              value={`− ₹${Number(invoice?.cashDiscount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
             />
             <InfoRow
               label="TDS"
@@ -856,7 +873,9 @@ export default function PaymentDetail() {
                   {utrFix.current}
                 </span>
               </p>
-              <label style={S.utrFixLabel}>Correct UTR / Reference Number *</label>
+              <label style={S.utrFixLabel}>
+                Correct UTR / Reference Number *
+              </label>
               <input
                 type="text"
                 style={{ ...S.utrFixInput, fontFamily: "monospace" }}
@@ -871,15 +890,17 @@ export default function PaymentDetail() {
                 value={utrFixReason}
                 onChange={(e) => setUtrFixReason(e.target.value)}
               />
-              <div style={{ fontSize: 11.5, color: "#64748b", marginBottom: 10 }}>
+              <div
+                style={{ fontSize: 11.5, color: "#64748b", marginBottom: 10 }}
+              >
                 Only the UTR text changes. Amounts and payment status stay as
                 they are. The old and new UTR are kept in the payment history
                 and audit log.
               </div>
-              {utrFixError && (
-                <div style={S.utrFixError}>{utrFixError}</div>
-              )}
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
+              {utrFixError && <div style={S.utrFixError}>{utrFixError}</div>}
+              <div
+                style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}
+              >
                 <button
                   style={S.cancelBtn}
                   disabled={utrFixSaving}

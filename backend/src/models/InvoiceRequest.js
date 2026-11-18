@@ -79,6 +79,12 @@ const invoiceRequestSchema = new mongoose.Schema(
     gstAmount: { type: Number, default: 0, min: 0 },
     tdsAmount: { type: Number, default: 0, min: 0 },
     roundOff: { type: Number, default: 0 }, // ± adjustment applied to base + GST
+    // ── Discounts — Nov 2026 ───────────────────────────────
+    // Additive, optional. Deducted from the invoice total (base + GST ±
+    // round off). TDS stays on the base amount and is NOT reduced by these.
+    // Existing documents simply read as 0 — no migration needed.
+    specialDiscount: { type: Number, default: 0, min: 0 },
+    cashDiscount: { type: Number, default: 0, min: 0 },
     netPayable: { type: Number, required: true, min: 0 },
     invoiceNumber: { type: String, required: true, trim: true },
     invoiceDate: { type: Date, required: true },
@@ -141,6 +147,8 @@ const invoiceRequestSchema = new mongoose.Schema(
         gstAmount: Number,
         tdsAmount: Number,
         roundOff: Number,
+        specialDiscount: Number,
+        cashDiscount: Number,
         netPayable: Number,
       },
       default: undefined,

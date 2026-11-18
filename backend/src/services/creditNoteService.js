@@ -8,7 +8,7 @@
 //   GST   — per line at that line's GST %, rounded to paise
 //   TDS   — on the base (pre-GST) amount, rounded to the rupee, recomputed
 //           on the reduced base (so the TDS deduction falls too)
-//   Net   — base + GST + roundOff − TDS
+//   Net   — base + GST + roundOff − special/cash discount − TDS
 // Payment side, applied on approval:
 //   totalAmount = max(new net, already paid)   → remaining = new net − paid
 //   anything already paid above the new net    → refund due (outside PMS)
@@ -26,7 +26,9 @@ const ACTIVE_INSTALLMENT = ["Raised", "Approved", "Excel Generated"];
 const paymentInProgress = (payment) =>
   !!payment &&
   (IN_PROGRESS.includes(payment.status) ||
-    (payment.installments || []).some((i) => ACTIVE_INSTALLMENT.includes(i.status)));
+    (payment.installments || []).some((i) =>
+      ACTIVE_INSTALLMENT.includes(i.status),
+    ));
 
 // The invoice's ORIGINAL lines. Older invoices may have no items; they are
 // treated as one line worth the original base amount.
@@ -110,7 +112,8 @@ const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
       total: round2(amount + gstAmount),
     });
   }
-  if (!picked.length) return fail("Enter the returned value for at least one line");
+  if (!picked.length)
+    return fail("Enter the returned value for at least one line");
 
   const baseAmount = round2(picked.reduce((s, l) => s + l.amount, 0));
   const gstAmount = round2(picked.reduce((s, l) => s + l.gstAmount, 0));
@@ -135,7 +138,18 @@ const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
         : 0;
   // A fully returned invoice should not leave a paise round-off payable.
   const newRoundOff = newBase === 0 ? 0 : curRoundOff;
-  const newNet = round2(Math.max(0, newBase + newGst + newRoundOff - newTds));
+  // Nov 2026 — special / cash discounts stay as entered on the invoice and
+  // keep reducing the net (0 on older invoices). Net is floored at 0.
+  const discounts =
+    newBase === 0
+      ? 0
+      : round2(
+          (Number(invoice.specialDiscount) || 0) +
+            (Number(invoice.cashDiscount) || 0),
+        );
+  const newNet = round2(
+    Math.max(0, newBase + newGst + newRoundOff - discounts - newTds),
+  );
   const curNet = round2(invoice.netPayable);
 
   return {

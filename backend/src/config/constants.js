@@ -41,7 +41,8 @@ module.exports = {
   // Must be attached before an invoice can be submitted, and once it is
   // submitted attachments can no longer be removed until it comes back
   // as Rejected. Matches the checklist on the invoice screens.
-  INVOICE_REQUIRED_DOC_TYPES: ["invoice", "quotation"],
+  // Nov 2026 — Quotation made optional; only the Invoice copy is mandatory.
+  INVOICE_REQUIRED_DOC_TYPES: ["invoice"],
   // Statuses in which attachments may be deleted / replaced.
   INVOICE_ATTACHMENT_EDITABLE_STATUSES: ["Draft", "Rejected"],
 

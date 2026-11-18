@@ -1089,6 +1089,27 @@ export default function PaymentProcessing() {
                               }}
                             >
                               ₹{inv.netPayable?.toLocaleString("en-IN")}
+                              {/* Nov 2026 — discount reference (only when present) */}
+                              {(Number(inv.specialDiscount) || 0) +
+                                (Number(inv.cashDiscount) || 0) >
+                                0 && (
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    color: "#b45309",
+                                    marginTop: 2,
+                                    cursor: "help",
+                                  }}
+                                  title={`Special discount ₹${Number(inv.specialDiscount || 0).toLocaleString("en-IN")} · Cash discount ₹${Number(inv.cashDiscount || 0).toLocaleString("en-IN")} (already deducted)`}
+                                >
+                                  🏷 Disc −₹
+                                  {(
+                                    (Number(inv.specialDiscount) || 0) +
+                                    (Number(inv.cashDiscount) || 0)
+                                  ).toLocaleString("en-IN")}
+                                </div>
+                              )}
                             </td>
                             {/* ✅ Payment Progress */}
                             <td style={S.td}>
@@ -1858,6 +1879,33 @@ export default function PaymentProcessing() {
                   <span>GST</span>
                   <strong>
                     ₹{raiseModal.gstAmount?.toLocaleString("en-IN")}
+                  </strong>
+                </div>
+                {(raiseModal.roundOff || 0) !== 0 && (
+                  <div style={S.summaryRow}>
+                    <span>Round Off</span>
+                    <strong>
+                      {raiseModal.roundOff < 0 ? "− " : "+ "}₹
+                      {Math.abs(raiseModal.roundOff).toLocaleString("en-IN")}
+                    </strong>
+                  </div>
+                )}
+                <div style={S.summaryRow}>
+                  <span>Special Discount</span>
+                  <strong style={{ color: "#b45309" }}>
+                    − ₹
+                    {Number(raiseModal.specialDiscount || 0).toLocaleString(
+                      "en-IN",
+                    )}
+                  </strong>
+                </div>
+                <div style={S.summaryRow}>
+                  <span>Cash Discount</span>
+                  <strong style={{ color: "#b45309" }}>
+                    − ₹
+                    {Number(raiseModal.cashDiscount || 0).toLocaleString(
+                      "en-IN",
+                    )}
                   </strong>
                 </div>
                 <div style={S.summaryRow}>

@@ -14,6 +14,19 @@ import {
 
 const EXPENSE_TYPES = ["Revenue", "Capital"];
 
+// ✅ Single source of truth for the on-screen net payable:
+// Base + GST ± Round Off − Special Discount − Cash Discount − TDS
+const num = (v) => parseFloat(v) || 0;
+const computeNet = (f) =>
+  (
+    num(f.amount) +
+    num(f.gstAmount) +
+    num(f.roundOff) -
+    num(f.specialDiscount) -
+    num(f.cashDiscount) -
+    num(f.tdsAmount)
+  ).toFixed(2);
+
 const STEPS = [
   "Basic Info",
   "Financial Details",
@@ -80,6 +93,9 @@ export default function EditPaymentRequest() {
               : 0,
           gstAmount: r.gstAmount ?? 0,
           roundOff: r.roundOff ?? 0,
+          // ✅ Nov 2026 — older invoices have no discount fields → 0
+          specialDiscount: r.specialDiscount ?? 0,
+          cashDiscount: r.cashDiscount ?? 0,
           // ✅ Load line items; synthesize one from legacy amount/GST if absent
           items:
             r.items && r.items.length > 0
@@ -151,16 +167,10 @@ export default function EditPaymentRequest() {
     const amount = parseFloat(form.amount) || 0;
     const gstPct = parseFloat(form.gstPercentage) || 0;
     const gstAmount = parseFloat(((amount * gstPct) / 100).toFixed(2));
-    const tds = parseFloat(form.tdsAmount) || 0;
     setForm((f) => ({
       ...f,
       gstAmount: gstAmount,
-      netPayable: (
-        amount +
-        gstAmount +
-        (parseFloat(form.roundOff) || 0) -
-        tds
-      ).toFixed(2),
+      netPayable: computeNet({ ...f, gstAmount }),
     }));
   }, [form?.amount, form?.gstPercentage, form?.items]);
 
@@ -169,20 +179,17 @@ export default function EditPaymentRequest() {
     if (errors[field]) setErrors((err) => ({ ...err, [field]: "" }));
   };
 
-  const handleRoundOff = (e) => {
+  // Round off / special discount / cash discount all re-derive net payable
+  const handleAdjustment = (field) => (e) => {
     const val = e.target.value;
     setForm((f) => {
-      const base = parseFloat(f.amount) || 0;
-      const gst = parseFloat(f.gstAmount) || 0;
-      const tds = parseFloat(f.tdsAmount) || 0;
-      const ro = parseFloat(val) || 0;
-      return {
-        ...f,
-        roundOff: val,
-        netPayable: (base + gst + ro - tds).toFixed(2),
-      };
+      const next = { ...f, [field]: val };
+      return { ...next, netPayable: computeNet(next) };
     });
+    if (errors[field] || errors.discount)
+      setErrors((er) => ({ ...er, [field]: "", discount: "" }));
   };
+  const handleRoundOff = handleAdjustment("roundOff");
 
   // ✅ Items drive base amount + total GST; net payable = base + GST − TDS
   const handleItemsChange = (items, totals) => {
@@ -196,11 +203,11 @@ export default function EditPaymentRequest() {
         totals.amount > 0
           ? parseFloat(((totals.gstAmount / totals.amount) * 100).toFixed(2))
           : 0,
-      netPayable: (
-        totals.grandTotal +
-        (parseFloat(f.roundOff) || 0) -
-        (parseFloat(f.tdsAmount) || 0)
-      ).toFixed(2),
+      netPayable: computeNet({
+        ...f,
+        amount: totals.amount,
+        gstAmount: totals.gstAmount,
+      }),
     }));
     if (errors.items) setErrors((er) => ({ ...er, items: "" }));
   };
@@ -222,6 +229,15 @@ export default function EditPaymentRequest() {
       } else {
         setShowItemErrors(false);
       }
+      // ✅ Discounts: never negative, never more than the invoice total
+      if (num(form.specialDiscount) < 0)
+        e.specialDiscount = "Cannot be negative";
+      if (num(form.cashDiscount) < 0) e.cashDiscount = "Cannot be negative";
+      const invoiceTotal =
+        num(form.amount) + num(form.gstAmount) + num(form.roundOff);
+      if (num(form.specialDiscount) + num(form.cashDiscount) > invoiceTotal)
+        e.discount =
+          "Total discount cannot exceed the invoice total (Base + GST ± Round Off)";
     }
     if (s === 2) {
       if (!form.invoiceNumber?.trim())
@@ -251,7 +267,7 @@ export default function EditPaymentRequest() {
   };
 
   // ── Save + Submit ──────────────────────────────────────
-  const REQUIRED_DOC_TYPES = ["invoice", "quotation"];
+  const REQUIRED_DOC_TYPES = ["invoice"]; // Quotation optional since Nov 2026
 
   const handleSaveAndSubmitClick = () => {
     if (dupResult?.isDuplicate) {
@@ -577,6 +593,62 @@ export default function EditPaymentRequest() {
                 </div>
               </div>
 
+              {/* ✅ Nov 2026 — Special / Cash discount (deducted from total) */}
+              <div
+                style={{
+                  marginTop: 14,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(2, minmax(0, 320px))",
+                  gap: 16,
+                }}
+              >
+                {[
+                  ["specialDiscount", "Special Discount (−)"],
+                  ["cashDiscount", "Cash Discount (−)"],
+                ].map(([field, label]) => (
+                  <div key={field}>
+                    <label
+                      style={{
+                        fontSize: 13,
+                        fontWeight: 600,
+                        color: "#475569",
+                        display: "block",
+                        marginBottom: 6,
+                      }}
+                    >
+                      {label}
+                    </label>
+                    <input
+                      style={{
+                        ...S.input,
+                        ...(errors[field] || errors.discount
+                          ? S.inputError
+                          : {}),
+                      }}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={form[field]}
+                      onChange={handleAdjustment(field)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                ))}
+              </div>
+              {(errors.specialDiscount ||
+                errors.cashDiscount ||
+                errors.discount) && (
+                <div style={{ fontSize: 13, color: "#dc2626", marginTop: 6 }}>
+                  {errors.discount ||
+                    errors.specialDiscount ||
+                    errors.cashDiscount}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
+                Deducted from the invoice total. TDS is still calculated on the
+                base amount.
+              </div>
+
               <div style={{ marginTop: 18 }}>
                 <div style={S.netPayableBox}>
                   <div>
@@ -592,7 +664,12 @@ export default function EditPaymentRequest() {
                       {Math.abs(parseFloat(form.roundOff) || 0).toLocaleString(
                         "en-IN",
                       )}
-                      ) − TDS (set by accounts)
+                      )
+                      {num(form.specialDiscount) > 0 &&
+                        ` − Special Disc. (₹${num(form.specialDiscount).toLocaleString("en-IN")})`}
+                      {num(form.cashDiscount) > 0 &&
+                        ` − Cash Disc. (₹${num(form.cashDiscount).toLocaleString("en-IN")})`}{" "}
+                      − TDS (set by accounts)
                     </div>
                   </div>
                   <div style={S.netValue}>
@@ -680,7 +757,7 @@ export default function EditPaymentRequest() {
                 <div style={S.uploadSectionTitle}>
                   📎 Attachments
                   <span style={S.uploadSectionSub}>
-                    Invoice and Quotation are required before submission
+                    Invoice is required before submission; Quotation is optional
                   </span>
                 </div>
                 <FileUpload
@@ -729,6 +806,14 @@ export default function EditPaymentRequest() {
                   <ReviewRow
                     label="Round Off"
                     value={`${(parseFloat(form.roundOff) || 0) < 0 ? "− " : "+ "}₹${Math.abs(parseFloat(form.roundOff) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                  />
+                  <ReviewRow
+                    label="Special Discount"
+                    value={`− ₹${num(form.specialDiscount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                  />
+                  <ReviewRow
+                    label="Cash Discount"
+                    value={`− ₹${num(form.cashDiscount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
                   />
                   <ReviewRow label="TDS Deduction" value="Set by accounts" />
                   <div style={S.reviewDivider} />
@@ -787,7 +872,7 @@ export default function EditPaymentRequest() {
                     {
                       type: "quotation",
                       label: "📋 Quotation",
-                      required: true,
+                      required: false,
                     },
                     { type: "po", label: "📦 Purchase Order", required: false },
                     { type: "challan", label: "🚚 Challan", required: false },
@@ -847,12 +932,12 @@ export default function EditPaymentRequest() {
                 </div>
 
                 {/* Warn if required attachments are missing */}
-                {["invoice", "quotation"].some(
+                {REQUIRED_DOC_TYPES.some(
                   (type) => !attachments.some((a) => a.type === type),
                 ) && (
                   <div style={S.attachWarning}>
-                    ⚠️ Invoice and Quotation are required. Please go back to
-                    Step 3 and upload them before submitting.
+                    ⚠️ The Invoice copy is required. Please go back to Step 3
+                    and upload it before submitting.
                   </div>
                 )}
               </div>
@@ -919,7 +1004,7 @@ export default function EditPaymentRequest() {
                         (record?.status === "Rejected" ||
                           (record?.status === "Draft" && isOwner)));
                     if (!canSubmit) return null;
-                    const missingDocs = ["invoice", "quotation"].filter(
+                    const missingDocs = REQUIRED_DOC_TYPES.filter(
                       (t) => !attachments.some((a) => a.type === t),
                     );
                     const blocked =

@@ -816,6 +816,19 @@ exports.generateExcel = async (req, res) => {
       "Round Off:",
       `${(invoice?.roundOff || 0) < 0 ? "− " : "+ "}₹${Math.abs(invoice?.roundOff || 0).toLocaleString("en-IN")}`,
     );
+    // Nov 2026 — discounts (shown only when present, for reference)
+    if ((invoice?.specialDiscount || 0) > 0) {
+      addSummaryRow(
+        "Special Discount:",
+        `− ₹${invoice.specialDiscount.toLocaleString("en-IN")}`,
+      );
+    }
+    if ((invoice?.cashDiscount || 0) > 0) {
+      addSummaryRow(
+        "Cash Discount:",
+        `− ₹${invoice.cashDiscount.toLocaleString("en-IN")}`,
+      );
+    }
     addSummaryRow(
       "TDS Deduction:",
       `₹${invoice?.tdsAmount?.toLocaleString("en-IN")}`,
@@ -937,7 +950,7 @@ exports.bulkGenerateExcel = async (req, res) => {
     })
       .populate(
         "invoiceRequest",
-        "requestId invoiceNumber invoiceDate amount gstAmount tdsAmount roundOff netPayable description remarks",
+        "requestId invoiceNumber invoiceDate amount gstAmount tdsAmount roundOff specialDiscount cashDiscount netPayable description remarks",
       )
       .populate(
         "vendor",
@@ -989,6 +1002,8 @@ exports.bulkGenerateExcel = async (req, res) => {
       { header: "Base Amount (₹)", key: "amount", width: 16 },
       { header: "GST (₹)", key: "gst", width: 12 },
       { header: "Round Off (₹)", key: "roundOff", width: 14 }, // ✅ added
+      { header: "Special Discount (₹)", key: "specialDiscount", width: 16 },
+      { header: "Cash Discount (₹)", key: "cashDiscount", width: 16 },
       { header: "TDS (₹)", key: "tds", width: 12 },
       { header: "Net Payable (₹)", key: "netPayable", width: 16 },
       { header: "Payment Amount (₹)", key: "paymentAmount", width: 18 },
@@ -1035,6 +1050,8 @@ exports.bulkGenerateExcel = async (req, res) => {
         amount: inv?.amount || 0,
         gst: inv?.gstAmount || 0,
         roundOff: inv?.roundOff || 0,
+        specialDiscount: inv?.specialDiscount || 0,
+        cashDiscount: inv?.cashDiscount || 0,
         tds: inv?.tdsAmount || 0,
         netPayable: inv?.netPayable || 0,
         paymentAmount: pay.paymentAmount || 0,
@@ -1060,7 +1077,15 @@ exports.bulkGenerateExcel = async (req, res) => {
       });
 
       // Right-align and bold amount columns
-      ["amount", "gst", "tds", "netPayable", "paymentAmount"].forEach((key) => {
+      [
+        "amount",
+        "gst",
+        "specialDiscount",
+        "cashDiscount",
+        "tds",
+        "netPayable",
+        "paymentAmount",
+      ].forEach((key) => {
         const cell = row.getCell(key);
         cell.alignment = { horizontal: "right", vertical: "middle" };
         cell.numFmt = "₹#,##0.00";

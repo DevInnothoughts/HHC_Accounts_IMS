@@ -104,7 +104,7 @@ export default function InvoiceDetail() {
       (invoice?.status === "Rejected" ||
         (invoice?.status === "Draft" && isOwner)));
 
-  const REQUIRED_DOC_TYPES = ["invoice", "quotation"];
+  const REQUIRED_DOC_TYPES = ["invoice"]; // Quotation optional since Nov 2026
   const missingRequiredDocs = REQUIRED_DOC_TYPES.filter(
     (t) => !invoice?.attachments?.some((a) => a.type === t),
   );
@@ -696,6 +696,27 @@ export default function InvoiceDetail() {
                       })}
                     </span>
                   </div>
+                  {/* Nov 2026 — discounts (0 by default) */}
+                  <div style={S.amountRow}>
+                    <span style={S.amountLabel}>Special Discount</span>
+                    <span style={{ ...S.amountVal, color: "#b45309" }}>
+                      − ₹
+                      {Number(invoice.specialDiscount || 0).toLocaleString(
+                        "en-IN",
+                        { minimumFractionDigits: 2 },
+                      )}
+                    </span>
+                  </div>
+                  <div style={S.amountRow}>
+                    <span style={S.amountLabel}>Cash Discount</span>
+                    <span style={{ ...S.amountVal, color: "#b45309" }}>
+                      − ₹
+                      {Number(invoice.cashDiscount || 0).toLocaleString(
+                        "en-IN",
+                        { minimumFractionDigits: 2 },
+                      )}
+                    </span>
+                  </div>
                   <div style={S.amountRow}>
                     <span style={S.amountLabel}>TDS Deduction</span>
                     <span style={{ ...S.amountVal, color: "#dc2626" }}>
@@ -931,6 +952,8 @@ export default function InvoiceDetail() {
                         invoice.amount +
                         (invoice.gstAmount || 0) +
                         (invoice.roundOff || 0) -
+                        (Number(invoice.specialDiscount) || 0) -
+                        (Number(invoice.cashDiscount) || 0) -
                         tdsAmount;
                       return (
                         <div

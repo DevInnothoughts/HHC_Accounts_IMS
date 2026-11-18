@@ -11,7 +11,7 @@ import api from "../api/axios";
 const DOC_TYPES = {
   payment: [
     { value: "invoice", label: "🧾 Invoice", required: true },
-    { value: "quotation", label: "📋 Quotation", required: true },
+    { value: "quotation", label: "📋 Quotation", required: false }, // optional since Nov 2026
     { value: "po", label: "📦 Purchase Order", required: false },
     { value: "challan", label: "🚚 Delivery Challan", required: false },
     { value: "other", label: "📎 Other", required: false },

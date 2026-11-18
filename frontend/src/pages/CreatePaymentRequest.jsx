@@ -14,6 +14,19 @@ import {
 } from "../components/PaymentCycleWidgets.jsx";
 
 const EXPENSE_TYPES = ["Revenue", "Capital"];
+
+// ✅ Single source of truth for the on-screen net payable:
+// Base + GST ± Round Off − Special Discount − Cash Discount − TDS
+const num = (v) => parseFloat(v) || 0;
+const computeNet = (f) =>
+  (
+    num(f.amount) +
+    num(f.gstAmount) +
+    num(f.roundOff) -
+    num(f.specialDiscount) -
+    num(f.cashDiscount) -
+    num(f.tdsAmount)
+  ).toFixed(2);
 const STEPS = [
   "Basic Info",
   "Financial Details",
@@ -31,6 +44,9 @@ const INIT = {
   gstPercentage: "0", // kept for legacy/display; per-item GST lives in items[]
   gstAmount: "0", // ✅ now the SUM of item GST (auto-calculated)
   tdsAmount: "0", // set by accounts during approval — sent as 0 initially
+  roundOff: "0",
+  specialDiscount: "0", // ✅ Nov 2026 — deducted from invoice total, default 0
+  cashDiscount: "0", // ✅ Nov 2026 — deducted from invoice total, default 0
   netPayable: "",
   invoiceNumber: "",
   invoiceDate: "",
@@ -109,16 +125,10 @@ export default function CreatePaymentRequest() {
     const amount = parseFloat(form.amount) || 0;
     const gstPct = parseFloat(form.gstPercentage) || 0;
     const gstAmount = parseFloat(((amount * gstPct) / 100).toFixed(2));
-    const tds = parseFloat(form.tdsAmount) || 0;
     setForm((f) => ({
       ...f,
       gstAmount: gstAmount.toString(),
-      netPayable: (
-        amount +
-        gstAmount +
-        (parseFloat(form.roundOff) || 0) -
-        tds
-      ).toFixed(2),
+      netPayable: computeNet({ ...f, gstAmount }),
     }));
   }, [form.amount, form.gstPercentage, form.items]);
 
@@ -132,20 +142,17 @@ export default function CreatePaymentRequest() {
     if (errors[field]) setErrors((e) => ({ ...e, [field]: "" }));
   };
 
-  const handleRoundOff = (e) => {
+  // Round off / special discount / cash discount all re-derive net payable
+  const handleAdjustment = (field) => (e) => {
     const val = e.target.value;
     setForm((f) => {
-      const base = parseFloat(f.amount) || 0;
-      const gst = parseFloat(f.gstAmount) || 0;
-      const tds = parseFloat(f.tdsAmount) || 0;
-      const ro = parseFloat(val) || 0;
-      return {
-        ...f,
-        roundOff: val,
-        netPayable: (base + gst + ro - tds).toFixed(2),
-      };
+      const next = { ...f, [field]: val };
+      return { ...next, netPayable: computeNet(next) };
     });
+    if (errors[field] || errors.discount)
+      setErrors((er) => ({ ...er, [field]: "", discount: "" }));
   };
+  const handleRoundOff = handleAdjustment("roundOff");
 
   // ✅ Items drive base amount + total GST; net payable = base + GST − TDS
   const handleItemsChange = (items, totals) => {
@@ -159,11 +166,11 @@ export default function CreatePaymentRequest() {
         totals.amount > 0
           ? parseFloat(((totals.gstAmount / totals.amount) * 100).toFixed(2))
           : 0,
-      netPayable: (
-        totals.grandTotal +
-        (parseFloat(f.roundOff) || 0) -
-        (parseFloat(f.tdsAmount) || 0)
-      ).toFixed(2),
+      netPayable: computeNet({
+        ...f,
+        amount: totals.amount,
+        gstAmount: totals.gstAmount,
+      }),
     }));
     if (errors.items) setErrors((er) => ({ ...er, items: "" }));
   };
@@ -185,6 +192,15 @@ export default function CreatePaymentRequest() {
       } else {
         setShowItemErrors(false);
       }
+      // ✅ Discounts: never negative, never more than the invoice total
+      if (num(form.specialDiscount) < 0)
+        e.specialDiscount = "Cannot be negative";
+      if (num(form.cashDiscount) < 0) e.cashDiscount = "Cannot be negative";
+      const invoiceTotal =
+        num(form.amount) + num(form.gstAmount) + num(form.roundOff);
+      if (num(form.specialDiscount) + num(form.cashDiscount) > invoiceTotal)
+        e.discount =
+          "Total discount cannot exceed the invoice total (Base + GST ± Round Off)";
     }
     if (s === 2) {
       if (!form.invoiceNumber?.trim())
@@ -238,7 +254,7 @@ export default function CreatePaymentRequest() {
   };
 
   // ✅ Final submit
-  const REQUIRED_DOC_TYPES = ["invoice", "quotation"];
+  const REQUIRED_DOC_TYPES = ["invoice"]; // Quotation optional since Nov 2026
 
   // Runs all existing validation, then opens the cycle popup.
   // Validation stays BEFORE the popup so the user is never shown the
@@ -524,6 +540,63 @@ export default function CreatePaymentRequest() {
                 />
               </div>
 
+              {/* ✅ Nov 2026 — Special / Cash discount (deducted from total) */}
+              {[
+                ["specialDiscount", "Special Discount (−)"],
+                ["cashDiscount", "Cash Discount (−)"],
+              ].map(([field, label]) => (
+                <div
+                  key={field}
+                  style={{
+                    marginTop: 10,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    gap: 10,
+                  }}
+                >
+                  <label
+                    style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: "#475569",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {label}
+                  </label>
+                  <input
+                    style={{
+                      ...S.input,
+                      width: 160,
+                      ...(errors[field] || errors.discount ? S.inputError : {}),
+                    }}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={form[field]}
+                    onChange={handleAdjustment(field)}
+                    placeholder="0.00"
+                  />
+                </div>
+              ))}
+              {(errors.specialDiscount ||
+                errors.cashDiscount ||
+                errors.discount) && (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: "#dc2626",
+                    marginTop: 6,
+                    textAlign: "right",
+                  }}
+                >
+                  {errors.discount ||
+                    errors.specialDiscount ||
+                    errors.cashDiscount}
+                </div>
+              )}
+
               <div style={{ marginTop: 18 }}>
                 <div style={S.netPayableBox}>
                   <div>
@@ -539,7 +612,12 @@ export default function CreatePaymentRequest() {
                       {Math.abs(parseFloat(form.roundOff) || 0).toLocaleString(
                         "en-IN",
                       )}
-                      ) − TDS (set by accounts)
+                      )
+                      {num(form.specialDiscount) > 0 &&
+                        ` − Special Disc. (₹${num(form.specialDiscount).toLocaleString("en-IN")})`}
+                      {num(form.cashDiscount) > 0 &&
+                        ` − Cash Disc. (₹${num(form.cashDiscount).toLocaleString("en-IN")})`}{" "}
+                      − TDS (set by accounts)
                     </div>
                   </div>
                   <div style={S.netValue}>
@@ -669,6 +747,14 @@ export default function CreatePaymentRequest() {
                     label="Round Off"
                     value={`${(parseFloat(form.roundOff) || 0) < 0 ? "− " : "+ "}₹${Math.abs(parseFloat(form.roundOff) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
                   />
+                  <ReviewRow
+                    label="Special Discount"
+                    value={`− ₹${num(form.specialDiscount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                  />
+                  <ReviewRow
+                    label="Cash Discount"
+                    value={`− ₹${num(form.cashDiscount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+                  />
                   <ReviewRow label="TDS" value="Set by accounts" />
                   <div
                     style={{ borderTop: "2px solid #e2e8f0", margin: "8px 0" }}
@@ -720,7 +806,7 @@ export default function CreatePaymentRequest() {
                 <div style={S.checklistTitle}>📋 Required Documents Status</div>
                 {[
                   { type: "invoice", label: "🧾 Invoice", required: true },
-                  { type: "quotation", label: "📋 Quotation", required: true },
+                  { type: "quotation", label: "📋 Quotation", required: false },
                   { type: "po", label: "📦 PO", required: false },
                   { type: "challan", label: "🚚 Challan", required: false },
                 ].map((doc) => {
@@ -825,7 +911,7 @@ export default function CreatePaymentRequest() {
                     {loading ? "Saving..." : "💾 Save as Draft"}
                   </button>
                   {(() => {
-                    const missingDocs = ["invoice", "quotation"].filter(
+                    const missingDocs = REQUIRED_DOC_TYPES.filter(
                       (t) => !savedAttachments.some((a) => a.type === t),
                     );
                     const blocked =

@@ -137,6 +137,33 @@ const computeInvoiceTotals = (items = []) => {
   return { items: normalized, amount, gstAmount };
 };
 
+// ✅ Nov 2026 — Special / Cash discount. Optional, default 0, never negative.
+// Deducted from the invoice total (base + GST ± round off); TDS is still
+// computed on the base amount only.
+const parseDiscount = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? +n.toFixed(2) : 0;
+};
+const totalDiscount = (doc) =>
+  parseDiscount(doc?.specialDiscount) + parseDiscount(doc?.cashDiscount);
+
+// Returns an error message, or null when the discounts are acceptable.
+const validateDiscounts = (raw, invoiceTotal) => {
+  for (const [key, label] of [
+    ["specialDiscount", "Special discount"],
+    ["cashDiscount", "Cash discount"],
+  ]) {
+    if (raw[key] === undefined || raw[key] === null || raw[key] === "")
+      continue;
+    const n = Number(raw[key]);
+    if (!Number.isFinite(n) || n < 0) return `${label} cannot be negative`;
+  }
+  if (totalDiscount(raw) > invoiceTotal + 0.001) {
+    return "Total discount cannot exceed the invoice total (Base + GST ± Round Off)";
+  }
+  return null;
+};
+
 // Existing invoices predate this field. Their cycle is derived at read
 // time from the Cluster Head entry already present in approvalHistory.
 // Nothing is written.
@@ -195,14 +222,22 @@ exports.createInvoice = async (req, res) => {
       payload.items = totals.items;
       payload.amount = totals.amount;
       payload.gstAmount = totals.gstAmount;
-      // TDS is applied later at accounts approval, so netPayable here = base + GST
+      // TDS is applied later at accounts approval, so netPayable here =
+      // base + GST ± round off − special discount − cash discount
       const roundOff = parseFloat(payload.roundOff) || 0;
       payload.roundOff = roundOff;
-      payload.netPayable = +(
-        totals.amount +
-        totals.gstAmount +
-        roundOff
-      ).toFixed(2);
+      const invoiceTotal = totals.amount + totals.gstAmount + roundOff;
+      const discountError = validateDiscounts(payload, invoiceTotal);
+      if (discountError) {
+        return res.status(400).json({ message: discountError });
+      }
+      payload.specialDiscount = parseDiscount(payload.specialDiscount);
+      payload.cashDiscount = parseDiscount(payload.cashDiscount);
+      payload.netPayable = +(invoiceTotal - totalDiscount(payload)).toFixed(2);
+    } else {
+      // Legacy path (no items): still store clean discount values.
+      payload.specialDiscount = parseDiscount(payload.specialDiscount);
+      payload.cashDiscount = parseDiscount(payload.cashDiscount);
     }
     const netPayable = payload.netPayable;
 
@@ -299,7 +334,7 @@ exports.submitInvoice = async (req, res) => {
 
     // ✅ Required attachments (Oct 2026). Was only checked in the browser,
     //    so a stale tab, an old cached app or a direct API call could
-    //    submit an invoice with no Invoice / Quotation attached.
+    //    submit an invoice with no Invoice attached. (Quotation optional since Nov 2026.)
     const missingDocs = INVOICE_REQUIRED_DOC_TYPES.filter(
       (t) => !(invoice.attachments || []).some((a) => a.type === t && a.url),
     );
@@ -523,9 +558,19 @@ const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
           invoice.amount +
           (invoice.gstAmount || 0) +
           (invoice.roundOff || 0) -
+          totalDiscount(invoice) - // ✅ special + cash discount (0 on old invoices)
           invoice.tdsAmount
         ).toFixed(2),
       );
+      if (invoice.netPayable < 0) {
+        return {
+          status: 400,
+          body: {
+            message:
+              "Net payable would be negative after discounts and TDS — please correct the discount or TDS %",
+          },
+        };
+      }
     }
 
     // ── Payment cycle ──────────────────────────────────────
@@ -996,7 +1041,30 @@ exports.updateInvoice = async (req, res) => {
         ? Number(updateData.roundOff) || 0
         : invoice.roundOff || 0;
     updateData.roundOff = roundOff;
-    updateData.netPayable = +(baseAmt + gstAmt + roundOff).toFixed(2);
+
+    // ✅ Discounts: keep the stored value unless the edit sends a new one.
+    const discounts = {
+      specialDiscount:
+        updateData.specialDiscount !== undefined
+          ? updateData.specialDiscount
+          : invoice.specialDiscount,
+      cashDiscount:
+        updateData.cashDiscount !== undefined
+          ? updateData.cashDiscount
+          : invoice.cashDiscount,
+    };
+    const invoiceTotal = baseAmt + gstAmt + roundOff;
+    const discountError = validateDiscounts(discounts, invoiceTotal);
+    if (discountError) {
+      return res.status(400).json({ message: discountError });
+    }
+    updateData.specialDiscount = parseDiscount(discounts.specialDiscount);
+    updateData.cashDiscount = parseDiscount(discounts.cashDiscount);
+    updateData.netPayable = +(
+      invoiceTotal -
+      updateData.specialDiscount -
+      updateData.cashDiscount
+    ).toFixed(2);
 
     // ✅ Same vendor rules as createInvoice when the vendor or branch changes.
     const newVendor = updateData.vendor ?? invoice.vendor;

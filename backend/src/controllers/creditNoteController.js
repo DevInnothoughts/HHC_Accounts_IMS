@@ -400,6 +400,8 @@ exports.approve = async (req, res) => {
         gstAmount: invoice.gstAmount,
         tdsAmount: invoice.tdsAmount,
         roundOff: invoice.roundOff,
+        specialDiscount: invoice.specialDiscount || 0,
+        cashDiscount: invoice.cashDiscount || 0,
         netPayable: invoice.netPayable,
       };
     }
