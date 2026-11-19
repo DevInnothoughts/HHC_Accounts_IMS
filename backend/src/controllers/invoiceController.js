@@ -34,6 +34,12 @@ const DOC_LABEL = {
   challan: "Challan",
 };
 const { logAction } = require("../services/auditService");
+const {
+  isValidGstType,
+  resolveGstType,
+  buildGstFields,
+  withGstSplit,
+} = require("../utils/gst");
 const { sendNotificationEmail } = require("../services/emailService");
 const {
   startSLATracking,
@@ -212,6 +218,19 @@ exports.createInvoice = async (req, res) => {
     // Priority was removed from the form (Oct 2026). The field stays on the
     // model with its "Normal" default so existing documents are untouched.
     delete payload.priority;
+
+    // ✅ Nov 2026 — GST supply type (CGST+SGST or IGST) is mandatory on
+    //    new invoices. The split fields are always derived server-side.
+    if (!isValidGstType(payload.gstType)) {
+      return res.status(400).json({
+        message:
+          "Please select the GST type — CGST + SGST (intra-state) or IGST (inter-state)",
+      });
+    }
+    delete payload.cgstAmount;
+    delete payload.sgstAmount;
+    delete payload.igstAmount;
+
     if (Array.isArray(items) && items.length > 0) {
       const totals = computeInvoiceTotals(items);
       if (totals.amount <= 0) {
@@ -219,9 +238,9 @@ exports.createInvoice = async (req, res) => {
           message: "Invoice must have at least one item with a value.",
         });
       }
-      payload.items = totals.items;
       payload.amount = totals.amount;
       payload.gstAmount = totals.gstAmount;
+      Object.assign(payload, buildGstFields(totals.items, payload.gstType));
       // TDS is applied later at accounts approval, so netPayable here =
       // base + GST ± round off − special discount − cash discount
       const roundOff = parseFloat(payload.roundOff) || 0;
@@ -238,6 +257,12 @@ exports.createInvoice = async (req, res) => {
       // Legacy path (no items): still store clean discount values.
       payload.specialDiscount = parseDiscount(payload.specialDiscount);
       payload.cashDiscount = parseDiscount(payload.cashDiscount);
+      const { items: _ignored, ...gstFields } = buildGstFields(
+        [],
+        payload.gstType,
+        payload.gstAmount,
+      );
+      Object.assign(payload, gstFields);
     }
     const netPayable = payload.netPayable;
 
@@ -1027,11 +1052,42 @@ exports.updateInvoice = async (req, res) => {
     delete updateData.attachments;
     delete updateData.paymentRequest;
 
+    // ✅ Nov 2026 — GST type. Split fields are never taken from the client.
+    delete updateData.cgstAmount;
+    delete updateData.sgstAmount;
+    delete updateData.igstAmount;
+    if (
+      updateData.gstType !== undefined &&
+      updateData.gstType !== null &&
+      updateData.gstType !== "" &&
+      !isValidGstType(updateData.gstType)
+    ) {
+      return res.status(400).json({ message: "Invalid GST type" });
+    }
+    if (!isValidGstType(updateData.gstType)) delete updateData.gstType;
+    // Legacy invoice with no gstType reads as IGST until the editor changes it.
+    const gstType = resolveGstType(updateData.gstType ?? invoice.gstType);
+
     if (Array.isArray(updateData.items) && updateData.items.length > 0) {
       const totals = computeInvoiceTotals(updateData.items);
-      updateData.items = totals.items;
       updateData.amount = totals.amount;
       updateData.gstAmount = totals.gstAmount;
+      Object.assign(updateData, buildGstFields(totals.items, gstType));
+    } else if (updateData.gstType) {
+      // Type changed without new items: re-split the stored items.
+      const storedItems = (invoice.items || []).map((it) =>
+        it.toObject ? it.toObject() : it,
+      );
+      if (storedItems.length) {
+        Object.assign(updateData, buildGstFields(storedItems, gstType));
+      } else {
+        const { items: _ignored, ...gstFields } = buildGstFields(
+          [],
+          gstType,
+          invoice.gstAmount,
+        );
+        Object.assign(updateData, gstFields);
+      }
     }
 
     const baseAmt = updateData.amount ?? invoice.amount;
@@ -1199,7 +1255,7 @@ exports.getInvoices = async (req, res) => {
       .limit(Number(limit));
 
     res.json({
-      invoices: invoices.map(withDerivedCycle),
+      invoices: invoices.map((i) => withGstSplit(withDerivedCycle(i))),
       total,
       page: Number(page),
       pages: Math.ceil(total / limit),
@@ -1239,7 +1295,7 @@ exports.getInvoiceById = async (req, res) => {
           .json({ message: "You do not have access to this record" });
       }
     }
-    res.json(withDerivedCycle(invoice));
+    res.json(withGstSplit(withDerivedCycle(invoice)));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

@@ -18,6 +18,11 @@ const { ROLES } = require("../config/constants");
 const { logAction } = require("../services/auditService");
 const access = require("../utils/vendorAccess");
 const {
+  isValidGstType,
+  resolveGstType,
+  buildGstFields,
+} = require("../utils/gst");
+const {
   uploadFile,
   validateFile,
 } = require("../services/linodeStorageService");
@@ -41,6 +46,7 @@ const EDITABLE = [
   "description",
   "amount",
   "gstPercentage",
+  "gstType", // Nov 2026
   "tdsPercentage",
   "dayOfMonth",
   "startPeriod",
@@ -104,6 +110,14 @@ const validate = async (data, req) => {
     if (Number.isNaN(v) || v < 0 || v > 100)
       return `${k === "gstPercentage" ? "GST" : "TDS"} % must be between 0 and 100`;
   }
+  // Nov 2026 — GST type. Older templates have none (read as IGST); once
+  // given it must be one of the two supply types.
+  if (
+    data.gstType !== undefined &&
+    data.gstType !== null &&
+    !isValidGstType(data.gstType)
+  )
+    return "Select the GST type — CGST + SGST or IGST";
   const day = Number(data.dayOfMonth);
   if (!Number.isInteger(day) || day < 1 || day > 31)
     return "Day of month must be between 1 and 31";
@@ -228,6 +242,11 @@ exports.getOne = async (req, res) => {
 exports.create = async (req, res) => {
   try {
     const data = pick(req.body || {});
+    // GST type is mandatory on new templates.
+    if (!isValidGstType(data.gstType))
+      return res.status(400).json({
+        message: "Select the GST type — CGST + SGST or IGST",
+      });
     const problem = await validate(data, req);
     if (problem) return res.status(400).json({ message: problem });
 
@@ -400,11 +419,9 @@ exports.approve = async (req, res) => {
     const t = await load(req, res);
     if (!t) return;
     if (t.status !== S.PENDING)
-      return res
-        .status(400)
-        .json({
-          message: `Only templates pending approval can be approved (this one is ${t.status})`,
-        });
+      return res.status(400).json({
+        message: `Only templates pending approval can be approved (this one is ${t.status})`,
+      });
     if (!t.agreement?.url)
       return res
         .status(400)
@@ -468,11 +485,9 @@ exports.reject = async (req, res) => {
     if (!reason)
       return res.status(400).json({ message: "Rejection reason is required" });
     if (t.status !== S.PENDING)
-      return res
-        .status(400)
-        .json({
-          message: `Only templates pending approval can be rejected (this one is ${t.status})`,
-        });
+      return res.status(400).json({
+        message: `Only templates pending approval can be rejected (this one is ${t.status})`,
+      });
 
     t.status = S.REJECTED;
     t.rejectionReason = reason;
@@ -505,11 +520,9 @@ const transition =
       const t = await load(req, res);
       if (!t) return;
       if (!from.includes(t.status))
-        return res
-          .status(400)
-          .json({
-            message: `Cannot ${action} a fixed payment that is ${t.status}`,
-          });
+        return res.status(400).json({
+          message: `Cannot ${action} a fixed payment that is ${t.status}`,
+        });
       const statusFrom = t.status;
       t.status = to;
       t.history.push({
@@ -578,12 +591,10 @@ exports.generateNow = async (req, res) => {
         invoiceId: r.invoice._id,
       });
     if (r.status === "exists")
-      return res
-        .status(409)
-        .json({
-          message: `This month's invoice already exists (${r.invoice?.requestId})`,
-          invoiceId: r.invoice?._id,
-        });
+      return res.status(409).json({
+        message: `This month's invoice already exists (${r.invoice?.requestId})`,
+        invoiceId: r.invoice?._id,
+      });
     return res
       .status(400)
       .json({ message: r.message || "Could not create the invoice" });
@@ -627,34 +638,27 @@ exports.adjustInvoiceAmount = async (req, res) => {
     // A credit note has already re-based this invoice; changing the amount
     // now would silently overwrite it.
     if (invoice.creditNoteTotal > 0)
-      return res
-        .status(400)
-        .json({
-          message:
-            "This invoice has an approved credit note — its amount can no longer be adjusted",
-        });
+      return res.status(400).json({
+        message:
+          "This invoice has an approved credit note — its amount can no longer be adjusted",
+      });
     const pendingCn = await require("../models/CreditNote").exists({
       invoice: invoice._id,
       status: "pending_approval",
     });
     if (pendingCn)
-      return res
-        .status(400)
-        .json({
-          message:
-            "A credit note is pending approval on this invoice — approve or reject it first",
-        });
+      return res.status(400).json({
+        message:
+          "A credit note is pending approval on this invoice — approve or reject it first",
+      });
     if (
       payment.status !== "Payment Pending" ||
       (payment.paidAmount || 0) > 0 ||
       payment.installments?.length
     )
-      return res
-        .status(400)
-        .json({
-          message:
-            "The amount can only be changed before any payment is raised",
-        });
+      return res.status(400).json({
+        message: "The amount can only be changed before any payment is raised",
+      });
 
     const gstPct = Number(invoice.items?.[0]?.gstPercentage) || 0;
     const tdsPct = Number(invoice.tdsPercentage) || 0;
@@ -667,18 +671,27 @@ exports.adjustInvoiceAmount = async (req, res) => {
       return res.status(400).json({ message: "The amount is unchanged" });
 
     const before = { amount: invoice.amount, netPayable: invoice.netPayable };
-    invoice.items = [
-      {
-        description:
-          invoice.items?.[0]?.description ||
-          invoice.description ||
-          "Fixed payment",
-        amount: base,
-        gstPercentage: gstPct,
-        gstAmount,
-        total: Math.round((base + gstAmount) * 100) / 100,
-      },
-    ];
+    // Nov 2026 — keep the invoice's GST type and re-split the new GST.
+    const gstFields = buildGstFields(
+      [
+        {
+          description:
+            invoice.items?.[0]?.description ||
+            invoice.description ||
+            "Fixed payment",
+          amount: base,
+          gstPercentage: gstPct,
+          gstAmount,
+          total: Math.round((base + gstAmount) * 100) / 100,
+        },
+      ],
+      resolveGstType(invoice),
+    );
+    invoice.items = gstFields.items;
+    invoice.gstType = gstFields.gstType;
+    invoice.cgstAmount = gstFields.cgstAmount;
+    invoice.sgstAmount = gstFields.sgstAmount;
+    invoice.igstAmount = gstFields.igstAmount;
     invoice.amount = base;
     invoice.gstAmount = gstAmount;
     invoice.tdsAmount = tdsAmount;

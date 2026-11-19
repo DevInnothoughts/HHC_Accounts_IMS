@@ -14,6 +14,7 @@
 //   anything already paid above the new net    → refund due (outside PMS)
 // ============================================================
 const CreditNote = require("../models/CreditNote");
+const { resolveGstType, splitGstAmount, sumSplits } = require("../utils/gst");
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
@@ -78,6 +79,8 @@ const creditedByLine = async (invoiceId, excludeId = null) => {
  */
 const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
   const lines = originalLines(invoice);
+  // Nov 2026 — the credit note follows the invoice's GST type.
+  const gstType = resolveGstType(invoice);
   const already = await creditedByLine(invoice._id, excludeId);
 
   const lineAvailability = lines.map((l) => ({
@@ -109,6 +112,7 @@ const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
       amount,
       gstPercentage: line.gstPercentage,
       gstAmount,
+      ...splitGstAmount(gstAmount, gstType), // Nov 2026 — CGST/SGST/IGST
       total: round2(amount + gstAmount),
     });
   }
@@ -126,6 +130,23 @@ const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
 
   const newBase = round2(Math.max(0, curBase - baseAmount));
   const newGst = round2(Math.max(0, curGst - gstAmount));
+
+  // GST split: current invoice split (stored, or derived for legacy
+  // invoices) minus this credit note's split. Floored at 0.
+  const cnSplit = sumSplits(picked, gstType);
+  const curSplit =
+    typeof invoice.cgstAmount === "number" && invoice.gstType
+      ? {
+          cgstAmount: round2(invoice.cgstAmount),
+          sgstAmount: round2(invoice.sgstAmount),
+          igstAmount: round2(invoice.igstAmount),
+        }
+      : splitGstAmount(curGst, gstType);
+  const newSplit = {
+    cgstAmount: round2(Math.max(0, curSplit.cgstAmount - cnSplit.cgstAmount)),
+    sgstAmount: round2(Math.max(0, curSplit.sgstAmount - cnSplit.sgstAmount)),
+    igstAmount: round2(Math.max(0, curSplit.igstAmount - cnSplit.igstAmount)),
+  };
   const tdsPct =
     invoice.tdsPercentage !== null && invoice.tdsPercentage !== undefined
       ? Number(invoice.tdsPercentage)
@@ -157,11 +178,15 @@ const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
     lines: picked,
     baseAmount,
     gstAmount,
+    gstType,
+    ...cnSplit,
     tdsReversal: Math.max(0, curTds - newTds),
     netReduction: round2(curNet - newNet),
     newTotals: {
       amount: newBase,
       gstAmount: newGst,
+      gstType,
+      ...newSplit,
       tdsAmount: newTds,
       roundOff: newRoundOff,
       netPayable: newNet,

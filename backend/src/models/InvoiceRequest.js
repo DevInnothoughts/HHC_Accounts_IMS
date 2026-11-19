@@ -31,6 +31,11 @@ const invoiceItemSchema = new mongoose.Schema(
     gstPercentage: { type: Number, required: true, min: 0, max: 100 },
     gstAmount: { type: Number, default: 0, min: 0 }, // amount * gstPercentage / 100
     total: { type: Number, default: 0, min: 0 }, // amount + gstAmount
+    // GST split — Nov 2026. Optional; derived from the invoice's gstType
+    // on save. Legacy items read their split at request time (as IGST).
+    cgstAmount: { type: Number, default: undefined, min: 0 },
+    sgstAmount: { type: Number, default: undefined, min: 0 },
+    igstAmount: { type: Number, default: undefined, min: 0 },
   },
   { _id: false },
 );
@@ -76,7 +81,16 @@ const invoiceRequestSchema = new mongoose.Schema(
     },
     items: { type: [invoiceItemSchema], default: [] },
     amount: { type: Number, required: true, min: 0 },
-    gstAmount: { type: Number, default: 0, min: 0 },
+    gstAmount: { type: Number, default: 0, min: 0 }, // TOTAL GST (unchanged meaning)
+    // ── GST supply type — Nov 2026 ─────────────────────────
+    // Additive, optional. "CGST_SGST" = intra-state, "IGST" = inter-state.
+    // Invoices saved before this field existed have no value and are
+    // treated as IGST at read time (utils/gst.js) — no migration.
+    // cgst + sgst + igst always equals gstAmount.
+    gstType: { type: String, enum: ["CGST_SGST", "IGST"], default: undefined },
+    cgstAmount: { type: Number, default: undefined, min: 0 },
+    sgstAmount: { type: Number, default: undefined, min: 0 },
+    igstAmount: { type: Number, default: undefined, min: 0 },
     tdsAmount: { type: Number, default: 0, min: 0 },
     roundOff: { type: Number, default: 0 }, // ± adjustment applied to base + GST
     // ── Discounts — Nov 2026 ───────────────────────────────
@@ -145,6 +159,9 @@ const invoiceRequestSchema = new mongoose.Schema(
         _id: false,
         amount: Number,
         gstAmount: Number,
+        cgstAmount: Number, // Nov 2026 — GST split before credit notes
+        sgstAmount: Number,
+        igstAmount: Number,
         tdsAmount: Number,
         roundOff: Number,
         specialDiscount: Number,
@@ -156,6 +173,19 @@ const invoiceRequestSchema = new mongoose.Schema(
     creditNoteTotal: { type: Number, default: undefined }, // sum of net reductions
     creditNoteRefundDue: { type: Number, default: undefined }, // vendor to refund outside PMS
 
+    // ── Tally export — Nov 2026 ────────────────────────────
+    // Optional; set when the record is included in a Tally import file,
+    // so the next export skips it. Existing documents simply lack it.
+    tallyExport: {
+      type: {
+        _id: false,
+        exportedAt: Date,
+        exportedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        batchId: String,
+        count: Number, // times exported (re-exports increment it)
+      },
+      default: undefined,
+    },
     // ── Fixed (recurring) payments — Oct 2026 ──────────────
     // All optional: ordinary invoices never carry them.
     // source "fixed_payment" = created automatically from an approved

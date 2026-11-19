@@ -11,6 +11,7 @@
 // payment record. Records are never deleted.
 // ============================================================
 const mongoose = require("mongoose");
+const { resolveGstType, splitGstAmount } = require("../utils/gst");
 const CreditNote = require("../models/CreditNote");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const PaymentProcessing = require("../models/PaymentProcessing");
@@ -170,6 +171,10 @@ exports.preview = async (req, res) => {
         ? {
             baseAmount: calc.baseAmount,
             gstAmount: calc.gstAmount,
+            gstType: calc.gstType,
+            cgstAmount: calc.cgstAmount,
+            sgstAmount: calc.sgstAmount,
+            igstAmount: calc.igstAmount,
             tdsReversal: calc.tdsReversal,
             netReduction: calc.netReduction,
             newNetPayable: calc.newTotals.netPayable,
@@ -266,6 +271,10 @@ exports.create = async (req, res) => {
       lines: calc.lines,
       baseAmount: calc.baseAmount,
       gstAmount: calc.gstAmount,
+      gstType: calc.gstType, // Nov 2026
+      cgstAmount: calc.cgstAmount,
+      sgstAmount: calc.sgstAmount,
+      igstAmount: calc.igstAmount,
       tdsReversal: calc.tdsReversal,
       netReduction: calc.netReduction,
       document: { name: fileName, url, key, uploadedAt: new Date() },
@@ -398,6 +407,14 @@ exports.approve = async (req, res) => {
       invoice.originalTotals = {
         amount: invoice.amount,
         gstAmount: invoice.gstAmount,
+        // Nov 2026 — GST split before the first credit note
+        ...(typeof invoice.cgstAmount === "number" && invoice.gstType
+          ? {
+              cgstAmount: invoice.cgstAmount,
+              sgstAmount: invoice.sgstAmount,
+              igstAmount: invoice.igstAmount,
+            }
+          : splitGstAmount(invoice.gstAmount, resolveGstType(invoice))),
         tdsAmount: invoice.tdsAmount,
         roundOff: invoice.roundOff,
         specialDiscount: invoice.specialDiscount || 0,
@@ -447,6 +464,10 @@ exports.approve = async (req, res) => {
     cn.lines = calc.lines;
     cn.baseAmount = calc.baseAmount;
     cn.gstAmount = calc.gstAmount;
+    cn.gstType = calc.gstType;
+    cn.cgstAmount = calc.cgstAmount;
+    cn.sgstAmount = calc.sgstAmount;
+    cn.igstAmount = calc.igstAmount;
     cn.tdsReversal = calc.tdsReversal;
     cn.netReduction = calc.netReduction;
     cn.applied = {

@@ -25,6 +25,7 @@ const {
   ROLES,
 } = require("../config/constants");
 const { logAction } = require("./auditService");
+const { buildGstFields } = require("../utils/gst");
 const { sendNotificationEmail } = require("./emailService");
 const {
   resolvePaymentCycle,
@@ -264,6 +265,20 @@ const generateForTemplate = async (template, opts = {}) => {
       ]
     : [];
 
+  // Nov 2026 — GST type from the template (legacy templates → IGST).
+  const gstFields = buildGstFields(
+    [
+      {
+        description: `${template.title} — ${periodLabel(period)}`,
+        amount: base,
+        gstPercentage: Number(template.gstPercentage) || 0,
+        gstAmount,
+        total: round2(base + gstAmount),
+      },
+    ],
+    template.gstType,
+  );
+
   let invoice;
   try {
     invoice = await InvoiceRequest.create({
@@ -271,15 +286,7 @@ const generateForTemplate = async (template, opts = {}) => {
       vendor: template.vendor,
       expenseType: template.expenseType,
       expenseCategory: template.expenseCategory,
-      items: [
-        {
-          description: `${template.title} — ${periodLabel(period)}`,
-          amount: base,
-          gstPercentage: Number(template.gstPercentage) || 0,
-          gstAmount,
-          total: round2(base + gstAmount),
-        },
-      ],
+      ...gstFields, // gstType, items (with split), cgst/sgst/igst totals
       amount: base,
       gstAmount,
       tdsPercentage: Number(template.tdsPercentage) || 0,

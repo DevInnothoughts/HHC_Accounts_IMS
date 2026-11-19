@@ -8,6 +8,12 @@ import DuplicateInvoiceChecker from "../components/DuplicateInvoiceChecker.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import InvoiceItemsEditor from "../components/InvoiceItemsEditor.jsx";
 import {
+  invoiceGstBreakup,
+  gstTypeLabel,
+  resolveGstType,
+  GST_TYPES,
+} from "../utils/gst";
+import {
   usePaymentCycle,
   PaymentCycleModal,
 } from "../components/PaymentCycleWidgets.jsx";
@@ -92,6 +98,9 @@ export default function EditPaymentRequest() {
               ? parseFloat(((r.gstAmount / r.amount) * 100).toFixed(2))
               : 0,
           gstAmount: r.gstAmount ?? 0,
+          // ✅ Nov 2026 — invoices saved before GST type existed read as IGST
+          gstType: resolveGstType(r),
+          gstTypeWasLegacy: !!r.gstTypeDerived,
           roundOff: r.roundOff ?? 0,
           // ✅ Nov 2026 — older invoices have no discount fields → 0
           specialDiscount: r.specialDiscount ?? 0,
@@ -222,6 +231,8 @@ export default function EditPaymentRequest() {
         e.expenseCategory = "Expense category is required";
     }
     if (s === 1) {
+      if (!form.gstType)
+        e.gstType = "Select CGST + SGST (intra-state) or IGST (inter-state)";
       if (!form.itemsValid) {
         e.items =
           "Please add at least one item and fix the highlighted errors below";
@@ -556,10 +567,30 @@ export default function EditPaymentRequest() {
                 TDS will be applied by the accounts team during approval.
               </div>
 
+              {form.gstTypeWasLegacy && (
+                <div
+                  style={{
+                    background: "#fffbeb",
+                    border: "1px solid #fde68a",
+                    color: "#92400e",
+                    borderRadius: 8,
+                    padding: "8px 12px",
+                    fontSize: 12,
+                    marginBottom: 12,
+                  }}
+                >
+                  This invoice was saved before GST type was recorded, so it is
+                  marked as IGST. Change it to CGST + SGST if the vendor is in
+                  the same state as the branch.
+                </div>
+              )}
               <InvoiceItemsEditor
                 value={form.items}
                 onChange={handleItemsChange}
                 showErrors={showItemErrors}
+                gstType={form.gstType}
+                onGstTypeChange={(v) => setForm((f) => ({ ...f, gstType: v }))}
+                gstTypeError={errors.gstType}
               />
               {errors.items && (
                 <div style={{ fontSize: 13, color: "#dc2626", marginTop: 8 }}>
@@ -803,6 +834,24 @@ export default function EditPaymentRequest() {
                     }`}
                     value={`₹${parseFloat(form.gstAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
                   />
+                  {(() => {
+                    const b = invoiceGstBreakup({
+                      gstType: form.gstType,
+                      gstAmount: form.gstAmount,
+                    });
+                    const f = (n) =>
+                      `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+                    return (
+                      <ReviewRow
+                        label={`GST Type — ${gstTypeLabel(form.gstType)}`}
+                        value={
+                          b.gstType === GST_TYPES.INTRA
+                            ? `CGST ${f(b.cgstAmount)} + SGST ${f(b.sgstAmount)}`
+                            : `IGST ${f(b.igstAmount)}`
+                        }
+                      />
+                    );
+                  })()}
                   <ReviewRow
                     label="Round Off"
                     value={`${(parseFloat(form.roundOff) || 0) < 0 ? "− " : "+ "}₹${Math.abs(parseFloat(form.roundOff) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}

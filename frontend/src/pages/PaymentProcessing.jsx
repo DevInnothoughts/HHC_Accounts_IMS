@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext.jsx";
 import { PAYMENT_WORKFLOW } from "../config/constants";
 import SearchableSelect from "../components/SearchableSelect.jsx";
 import BulkUtrModal from "../components/BulkUtrModal.jsx";
+import { gstTypeLabel } from "../utils/gst";
 
 // Rows per page. All-time data is served page by page, never in one payload.
 const PAGE_SIZE = 20;
@@ -1876,7 +1877,7 @@ export default function PaymentProcessing() {
                   <strong>₹{raiseModal.amount?.toLocaleString("en-IN")}</strong>
                 </div>
                 <div style={S.summaryRow}>
-                  <span>GST</span>
+                  <span>GST ({gstTypeLabel(raiseModal)})</span>
                   <strong>
                     ₹{raiseModal.gstAmount?.toLocaleString("en-IN")}
                   </strong>

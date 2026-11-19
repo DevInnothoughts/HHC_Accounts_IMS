@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { GST_TYPES, resolveGstType, splitGstAmount } = require("../utils/gst");
 const PaymentProcessing = require("../models/PaymentProcessing");
 const InvoiceRequest = require("../models/InvoiceRequest");
 const User = require("../models/User");
@@ -812,6 +813,26 @@ exports.generateExcel = async (req, res) => {
       "GST Amount:",
       `₹${invoice?.gstAmount?.toLocaleString("en-IN")}`,
     );
+    // Nov 2026 — GST split (legacy invoices without a type read as IGST)
+    {
+      const gstType = resolveGstType(invoice);
+      const split = splitGstAmount(invoice?.gstAmount, gstType);
+      if (gstType === GST_TYPES.INTRA) {
+        addSummaryRow(
+          "  CGST:",
+          `₹${split.cgstAmount.toLocaleString("en-IN")}`,
+        );
+        addSummaryRow(
+          "  SGST:",
+          `₹${split.sgstAmount.toLocaleString("en-IN")}`,
+        );
+      } else {
+        addSummaryRow(
+          "  IGST:",
+          `₹${split.igstAmount.toLocaleString("en-IN")}`,
+        );
+      }
+    }
     addSummaryRow(
       "Round Off:",
       `${(invoice?.roundOff || 0) < 0 ? "− " : "+ "}₹${Math.abs(invoice?.roundOff || 0).toLocaleString("en-IN")}`,
@@ -950,7 +971,7 @@ exports.bulkGenerateExcel = async (req, res) => {
     })
       .populate(
         "invoiceRequest",
-        "requestId invoiceNumber invoiceDate amount gstAmount tdsAmount roundOff specialDiscount cashDiscount netPayable description remarks",
+        "requestId invoiceNumber invoiceDate amount gstAmount gstType tdsAmount roundOff specialDiscount cashDiscount netPayable description remarks",
       )
       .populate(
         "vendor",
@@ -1001,6 +1022,11 @@ exports.bulkGenerateExcel = async (req, res) => {
       { header: "IFSC Code", key: "ifscCode", width: 14 },
       { header: "Base Amount (₹)", key: "amount", width: 16 },
       { header: "GST (₹)", key: "gst", width: 12 },
+      // Nov 2026 — GST split (legacy invoices read as IGST)
+      { header: "GST Type", key: "gstType", width: 12 },
+      { header: "CGST (₹)", key: "cgst", width: 12 },
+      { header: "SGST (₹)", key: "sgst", width: 12 },
+      { header: "IGST (₹)", key: "igst", width: 12 },
       { header: "Round Off (₹)", key: "roundOff", width: 14 }, // ✅ added
       { header: "Special Discount (₹)", key: "specialDiscount", width: 16 },
       { header: "Cash Discount (₹)", key: "cashDiscount", width: 16 },
@@ -1049,6 +1075,16 @@ exports.bulkGenerateExcel = async (req, res) => {
         ifscCode: vendor?.ifscCode || "—",
         amount: inv?.amount || 0,
         gst: inv?.gstAmount || 0,
+        ...(() => {
+          const t = resolveGstType(inv);
+          const sp = splitGstAmount(inv?.gstAmount, t);
+          return {
+            gstType: t === GST_TYPES.INTRA ? "CGST+SGST" : "IGST",
+            cgst: sp.cgstAmount,
+            sgst: sp.sgstAmount,
+            igst: sp.igstAmount,
+          };
+        })(),
         roundOff: inv?.roundOff || 0,
         specialDiscount: inv?.specialDiscount || 0,
         cashDiscount: inv?.cashDiscount || 0,
@@ -1080,6 +1116,9 @@ exports.bulkGenerateExcel = async (req, res) => {
       [
         "amount",
         "gst",
+        "cgst",
+        "sgst",
+        "igst",
         "specialDiscount",
         "cashDiscount",
         "tds",

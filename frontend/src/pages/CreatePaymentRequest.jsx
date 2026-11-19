@@ -8,6 +8,7 @@ import DuplicateInvoiceChecker from "../components/DuplicateInvoiceChecker.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import InvoiceItemsEditor from "../components/InvoiceItemsEditor.jsx";
 import SearchableSelect from "../components/SearchableSelect.jsx";
+import { invoiceGstBreakup, gstTypeLabel, GST_TYPES } from "../utils/gst";
 import {
   usePaymentCycle,
   PaymentCycleModal,
@@ -43,6 +44,7 @@ const INIT = {
   amount: "", // ✅ now the SUM of item values (auto-calculated)
   gstPercentage: "0", // kept for legacy/display; per-item GST lives in items[]
   gstAmount: "0", // ✅ now the SUM of item GST (auto-calculated)
+  gstType: "", // ✅ Nov 2026 — "CGST_SGST" | "IGST"; must be chosen
   tdsAmount: "0", // set by accounts during approval — sent as 0 initially
   roundOff: "0",
   specialDiscount: "0", // ✅ Nov 2026 — deducted from invoice total, default 0
@@ -185,6 +187,8 @@ export default function CreatePaymentRequest() {
         e.expenseCategory = "Expense category is required";
     }
     if (s === 1) {
+      if (!form.gstType)
+        e.gstType = "Select CGST + SGST (intra-state) or IGST (inter-state)";
       if (!form.itemsValid) {
         e.items =
           "Please add at least one item and fix the highlighted errors below";
@@ -504,6 +508,9 @@ export default function CreatePaymentRequest() {
                 value={form.items}
                 onChange={handleItemsChange}
                 showErrors={showItemErrors}
+                gstType={form.gstType}
+                onGstTypeChange={(v) => setField("gstType", v)}
+                gstTypeError={errors.gstType}
               />
               {errors.items && (
                 <div style={{ fontSize: 13, color: "#dc2626", marginTop: 8 }}>
@@ -743,6 +750,24 @@ export default function CreatePaymentRequest() {
                     }`}
                     value={`₹${parseFloat(form.gstAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
                   />
+                  {(() => {
+                    const b = invoiceGstBreakup({
+                      gstType: form.gstType,
+                      gstAmount: form.gstAmount,
+                    });
+                    const f = (n) =>
+                      `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+                    return (
+                      <ReviewRow
+                        label={`GST Type — ${gstTypeLabel(form.gstType)}`}
+                        value={
+                          b.gstType === GST_TYPES.INTRA
+                            ? `CGST ${f(b.cgstAmount)} + SGST ${f(b.sgstAmount)}`
+                            : `IGST ${f(b.igstAmount)}`
+                        }
+                      />
+                    );
+                  })()}
                   <ReviewRow
                     label="Round Off"
                     value={`${(parseFloat(form.roundOff) || 0) < 0 ? "− " : "+ "}₹${Math.abs(parseFloat(form.roundOff) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}

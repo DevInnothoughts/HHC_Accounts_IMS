@@ -29,6 +29,7 @@ import SLADashboard from "./pages/SLADashboard.jsx";
 import PrimaryReports from "./pages/PrimaryReports.jsx";
 import FixedPayments from "./pages/FixedPayments.jsx";
 import CreditNotes from "./pages/CreditNotes.jsx";
+import TallyExport from "./pages/TallyExport.jsx"; // Nov 2026
 
 const ProtectedRoute = ({ children, roles }) => {
   const { user } = useAuth();
@@ -278,6 +279,16 @@ export default function App() {
             element={
               <ProtectedRoute roles={["super_admin", "accounts"]}>
                 <SLADashboard />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Tally import file — Nov 2026 */}
+          <Route
+            path="/tally-export"
+            element={
+              <ProtectedRoute roles={["accounts", "super_admin"]}>
+                <TallyExport />
               </ProtectedRoute>
             }
           />

@@ -85,6 +85,13 @@ const navItems = [
     icon: "📈",
     roles: ["accounts", "super_admin", "cluster_head", "director"],
   },
+  // Tally import file — Nov 2026
+  {
+    label: "Tally Export",
+    path: "/tally-export",
+    icon: "📤",
+    roles: ["accounts", "super_admin"],
+  },
   {
     label: "Audit Logs",
     path: "/audit-logs",

@@ -4,6 +4,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
+import { invoiceGstBreakup, gstTypeLabel, GST_TYPES } from "../utils/gst";
 
 const STATUS_STYLES = {
   "Payment Pending": { bg: "#f1f5f9", color: "#475569", icon: "⏳" },
@@ -488,8 +489,17 @@ export default function PaymentDetail() {
               value={`₹${invoice?.amount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
             />
             <InfoRow
-              label="GST"
-              value={`₹${invoice?.gstAmount?.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`}
+              label={`GST (${gstTypeLabel(invoice)})`}
+              value={(() => {
+                const f = (n) =>
+                  `₹${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`;
+                const b = invoiceGstBreakup(invoice);
+                const parts =
+                  b.gstType === GST_TYPES.INTRA
+                    ? `CGST ${f(b.cgstAmount)} + SGST ${f(b.sgstAmount)}`
+                    : `IGST ${f(b.igstAmount)}`;
+                return `${f(invoice?.gstAmount)} · ${parts}`;
+              })()}
             />
             <InfoRow
               label="Round Off"

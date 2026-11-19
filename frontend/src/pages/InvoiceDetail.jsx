@@ -6,6 +6,12 @@ import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import FileUpload from "../components/FileUpload.jsx";
 import CreditNotesPanel from "../components/CreditNotesPanel.jsx";
+import {
+  invoiceGstBreakup,
+  gstTypeLabel,
+  gstRateLabel,
+  GST_TYPES,
+} from "../utils/gst";
 import { INVOICE_WORKFLOW, INVOICE_STAGES } from "../config/constants";
 import {
   usePaymentCycle,
@@ -640,6 +646,11 @@ export default function InvoiceDetail() {
                             </td>
                             <td style={{ padding: "8px", textAlign: "right" }}>
                               {it.gstPercentage}%
+                              {Number(it.gstPercentage) > 0 && (
+                                <div style={{ fontSize: 10, color: "#94a3b8" }}>
+                                  {gstRateLabel(it.gstPercentage, invoice)}
+                                </div>
+                              )}
                             </td>
                             <td style={{ padding: "8px", textAlign: "right" }}>
                               ₹
@@ -679,7 +690,27 @@ export default function InvoiceDetail() {
                     </span>
                   </div>
                   <div style={S.amountRow}>
-                    <span style={S.amountLabel}>GST Amount</span>
+                    <span style={S.amountLabel}>
+                      GST Amount{" "}
+                      <span
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          padding: "1px 6px",
+                          borderRadius: 10,
+                          background: "#eff6ff",
+                          color: "#1e40af",
+                          marginLeft: 4,
+                        }}
+                        title={
+                          invoiceGstBreakup(invoice).isLegacy
+                            ? "Saved before GST type was recorded — treated as IGST"
+                            : undefined
+                        }
+                      >
+                        {gstTypeLabel(invoice)}
+                      </span>
+                    </span>
                     <span style={S.amountVal}>
                       + ₹
                       {invoice.gstAmount?.toLocaleString("en-IN", {
@@ -687,6 +718,36 @@ export default function InvoiceDetail() {
                       })}
                     </span>
                   </div>
+                  {(() => {
+                    const b = invoiceGstBreakup(invoice);
+                    const rows =
+                      b.gstType === GST_TYPES.INTRA
+                        ? [
+                            ["CGST", b.cgstAmount],
+                            ["SGST", b.sgstAmount],
+                          ]
+                        : [["IGST", b.igstAmount]];
+                    return rows.map(([label, val]) => (
+                      <div
+                        key={label}
+                        style={{
+                          ...S.amountRow,
+                          paddingLeft: 14,
+                          fontSize: 12,
+                        }}
+                      >
+                        <span style={{ ...S.amountLabel, fontSize: 12 }}>
+                          {label}
+                        </span>
+                        <span style={{ ...S.amountVal, fontSize: 12 }}>
+                          ₹
+                          {val.toLocaleString("en-IN", {
+                            minimumFractionDigits: 2,
+                          })}
+                        </span>
+                      </div>
+                    ));
+                  })()}
                   <div style={S.amountRow}>
                     <span style={S.amountLabel}>Round Off</span>
                     <span style={S.amountVal}>

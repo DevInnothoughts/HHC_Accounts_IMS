@@ -125,6 +125,8 @@ const startServer = async () => {
   app.use("/api/fixed-payments", require("./routes/fixedPayments"));
   // Credit notes against approved invoices — router applies authenticate.
   app.use("/api/credit-notes", require("./routes/creditNotes"));
+  // Tally import file (Nov 2026) — router applies authenticate itself.
+  app.use("/api/tally", require("./routes/tally"));
 
   const { initSLAScheduler } = require("./jobs/slaScheduler");
   await initSLAScheduler();

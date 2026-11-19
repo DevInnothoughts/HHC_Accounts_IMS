@@ -26,6 +26,10 @@ const lineSchema = new mongoose.Schema(
     amount: { type: Number, required: true, min: 0.01 }, // returned value, pre-GST
     gstPercentage: { type: Number, default: 0 },
     gstAmount: { type: Number, default: 0 },
+    // Nov 2026 — GST split, from the invoice's GST type. Optional.
+    cgstAmount: { type: Number, default: undefined },
+    sgstAmount: { type: Number, default: undefined },
+    igstAmount: { type: Number, default: undefined },
     total: { type: Number, default: 0 },
   },
   { _id: false },
@@ -63,6 +67,12 @@ const creditNoteSchema = new mongoose.Schema(
     // approved in between, which can move TDS rounding by a rupee).
     baseAmount: { type: Number, required: true }, // sum of line amounts
     gstAmount: { type: Number, default: 0 },
+    // Nov 2026 — copied from the invoice (legacy invoices → IGST). Optional,
+    // so existing credit notes stay valid. Feeds the Tally Debit Note export.
+    gstType: { type: String, enum: ["CGST_SGST", "IGST"], default: undefined },
+    cgstAmount: { type: Number, default: undefined },
+    sgstAmount: { type: Number, default: undefined },
+    igstAmount: { type: Number, default: undefined },
     tdsReversal: { type: Number, default: 0 }, // TDS no longer deducted
     netReduction: { type: Number, required: true }, // cut in net payable
 
@@ -96,6 +106,19 @@ const creditNoteSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
+    },
+    // ── Tally export — Nov 2026 ────────────────────────────
+    // Optional; set when the record is included in a Tally import file,
+    // so the next export skips it. Existing documents simply lack it.
+    tallyExport: {
+      type: {
+        _id: false,
+        exportedAt: Date,
+        exportedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        batchId: String,
+        count: Number, // times exported (re-exports increment it)
+      },
+      default: undefined,
     },
     decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     decidedAt: { type: Date },

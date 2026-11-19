@@ -67,6 +67,9 @@ const fixedPaymentSchema = new mongoose.Schema(
     // amount before raising its payment; the template is not changed.
     amount: { type: Number, required: true, min: 0.01 }, // base, pre-GST
     gstPercentage: { type: Number, default: 0, min: 0, max: 100 },
+    // Nov 2026 — GST supply type. Optional so existing templates stay
+    // valid; a template without it generates invoices as IGST.
+    gstType: { type: String, enum: ["CGST_SGST", "IGST"], default: undefined },
     tdsPercentage: { type: Number, default: 0, min: 0, max: 100 },
 
     // Day of month the invoice is created (1–31). Months shorter than this

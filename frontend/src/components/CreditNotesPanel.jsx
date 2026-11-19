@@ -367,8 +367,12 @@ export default function CreditNotesPanel({
 
             {r && (
               <div style={P.calc}>
-                Returned {inr(r.baseAmount)} + GST {inr(r.gstAmount)} − TDS no
-                longer deducted {inr(r.tdsReversal)} ={" "}
+                Returned {inr(r.baseAmount)} + GST {inr(r.gstAmount)}
+                {r.gstAmount > 0 &&
+                  (r.gstType === "CGST_SGST"
+                    ? ` (CGST ${inr(r.cgstAmount)} + SGST ${inr(r.sgstAmount)})`
+                    : ` (IGST ${inr(r.igstAmount ?? r.gstAmount)})`)}{" "}
+                − TDS no longer deducted {inr(r.tdsReversal)} ={" "}
                 <strong>net payable reduces by {inr(r.netReduction)}</strong>
                 <br />
                 Net payable {inr(preview.currentNetPayable)} →{" "}

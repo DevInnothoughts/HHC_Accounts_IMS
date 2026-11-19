@@ -4,8 +4,16 @@
 // Items drive base amount + total GST.
 // Emits onChange(items, { amount, gstAmount, grandTotal, valid }).
 // Pass showErrors={true} (e.g. on a failed "Next") to reveal all errors.
+// Nov 2026 — GST type: pass gstType + onGstTypeChange to show the
+// CGST + SGST / IGST selector; totals and rows show the split.
 // ============================================================
 import React, { useEffect, useState } from "react";
+import {
+  GST_TYPES,
+  GST_TYPE_OPTIONS,
+  splitGstAmount,
+  gstRateLabel,
+} from "../utils/gst";
 
 const GST_PRESETS = [0, 5, 12, 18, 28];
 const MAX_DESC = 200;
@@ -67,7 +75,14 @@ const validateRow = (r) => {
   return errs;
 };
 
-export default function InvoiceItemsEditor({ value, onChange, showErrors }) {
+export default function InvoiceItemsEditor({
+  value,
+  onChange,
+  showErrors,
+  gstType, // "CGST_SGST" | "IGST" | "" (not chosen yet)
+  onGstTypeChange,
+  gstTypeError,
+}) {
   const [rows, setRows] = useState(() =>
     Array.isArray(value) && value.length
       ? value.map((it) => ({
@@ -150,6 +165,8 @@ export default function InvoiceItemsEditor({ value, onChange, showErrors }) {
     { amount: 0, gst: 0 },
   );
   const grand = totals.amount + totals.gst;
+  const split = splitGstAmount(totals.gst, gstType);
+  const isIntra = gstType === GST_TYPES.INTRA;
 
   const nonBlankCount = rows.filter((r) => !isBlankRow(r)).length;
   const showNoItemBanner = showErrors && nonBlankCount === 0;
@@ -165,6 +182,40 @@ export default function InvoiceItemsEditor({ value, onChange, showErrors }) {
           + Add Item
         </button>
       </div>
+
+      {onGstTypeChange && (
+        <div style={S.gstTypeBox}>
+          <div style={S.gstTypeLabel}>
+            GST Type <span style={{ color: "#dc2626" }}>*</span>
+          </div>
+          <div style={S.gstTypeOptions}>
+            {GST_TYPE_OPTIONS.map((o) => {
+              const on = gstType === o.value;
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => onGstTypeChange(o.value)}
+                  style={{
+                    ...S.gstTypeBtn,
+                    ...(on ? S.gstTypeBtnOn : {}),
+                    ...(gstTypeError && !gstType
+                      ? { borderColor: "#dc2626" }
+                      : {}),
+                  }}
+                  title={o.hint}
+                >
+                  <span style={{ fontWeight: 700 }}>{o.label}</span>
+                  <span style={S.gstTypeHint}>{o.hint}</span>
+                </button>
+              );
+            })}
+          </div>
+          {gstTypeError && !gstType && (
+            <div style={S.fieldErr}>{gstTypeError}</div>
+          )}
+        </div>
+      )}
 
       {showNoItemBanner && (
         <div style={S.banner}>
@@ -256,7 +307,14 @@ export default function InvoiceItemsEditor({ value, onChange, showErrors }) {
                       <div style={S.fieldErr}>{rowErrors.gstPercentage}</div>
                     )}
                   </td>
-                  <td style={S.cellVal}>{inr(gstAmt)}</td>
+                  <td style={S.cellVal}>
+                    {inr(gstAmt)}
+                    {gstType && Number(r.gstPercentage) > 0 && (
+                      <div style={S.splitHint}>
+                        {gstRateLabel(r.gstPercentage, gstType)}
+                      </div>
+                    )}
+                  </td>
                   <td style={{ ...S.cellVal, fontWeight: 700 }}>
                     {inr(amount + gstAmt)}
                   </td>
@@ -291,6 +349,24 @@ export default function InvoiceItemsEditor({ value, onChange, showErrors }) {
           <span style={S.totalLabel}>Total GST</span>
           <span style={S.totalVal}>{inr(totals.gst)}</span>
         </div>
+        {gstType &&
+          (isIntra ? (
+            <>
+              <div style={S.subRow}>
+                <span>CGST</span>
+                <span>{inr(split.cgstAmount)}</span>
+              </div>
+              <div style={S.subRow}>
+                <span>SGST</span>
+                <span>{inr(split.sgstAmount)}</span>
+              </div>
+            </>
+          ) : (
+            <div style={S.subRow}>
+              <span>IGST</span>
+              <span>{inr(split.igstAmount)}</span>
+            </div>
+          ))}
         <div style={{ ...S.totalRow, ...S.grandRow }}>
           <span style={S.grandLabel}>Grand Total (before TDS)</span>
           <span style={S.grandVal}>{inr(grand)}</span>
@@ -422,4 +498,42 @@ const S = {
   grandLabel: { fontSize: 14, fontWeight: 700, color: "#1a3c6e" },
   grandVal: { fontSize: 18, fontWeight: 700, color: "#1a3c6e" },
   note: { fontSize: 11, color: "#94a3b8", marginTop: 8, fontStyle: "italic" },
+  // Nov 2026 — GST type selector + split rows
+  gstTypeBox: { marginBottom: 14 },
+  gstTypeLabel: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "#475569",
+    marginBottom: 6,
+  },
+  gstTypeOptions: { display: "flex", gap: 10, flexWrap: "wrap" },
+  gstTypeBtn: {
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "flex-start",
+    gap: 2,
+    padding: "8px 14px",
+    border: "1.5px solid #e2e8f0",
+    borderRadius: 8,
+    background: "#fff",
+    color: "#334155",
+    fontSize: 13,
+    cursor: "pointer",
+    textAlign: "left",
+    minWidth: 200,
+  },
+  gstTypeBtnOn: {
+    borderColor: "#2563eb",
+    background: "#eff6ff",
+    color: "#1e40af",
+  },
+  gstTypeHint: { fontSize: 11, color: "#64748b", fontWeight: 400 },
+  splitHint: { fontSize: 10, color: "#94a3b8", marginTop: 2 },
+  subRow: {
+    display: "flex",
+    justifyContent: "space-between",
+    padding: "2px 0 2px 12px",
+    fontSize: 12,
+    color: "#64748b",
+  },
 };
