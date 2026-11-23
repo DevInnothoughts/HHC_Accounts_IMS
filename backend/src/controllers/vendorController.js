@@ -261,6 +261,10 @@ exports.createVendor = async (req, res) => {
 
     if (!data.branch || !validId(data.branch))
       return res.status(400).json({ message: "Branch is required" });
+
+    // Email is compulsory for every new vendor.
+    const emailErr = svc.emailError(data.email, true);
+    if (emailErr) return res.status(400).json({ message: emailErr });
     if (!access.canAccessBranch(req, data.branch))
       return res
         .status(403)
@@ -454,6 +458,14 @@ exports.updateVendor = async (req, res) => {
     }
 
     const data = svc.blankEnumsToUndefined(pick(req.body, WRITABLE_FIELDS));
+
+    // Email: checked only when it changes, so legacy rows without one (or
+    // with an old malformed one) can still be saved for other edits. An
+    // existing email may be changed but not removed.
+    if ("email" in data && !sameValue("email", data.email, vendor.email)) {
+      const emailErr = svc.emailError(data.email, Boolean(vendor.email));
+      if (emailErr) return res.status(400).json({ message: emailErr });
+    }
 
     if (vendor.isMasterOwned()) {
       // Requirement 6. These fields are a copy of the master. Editing them

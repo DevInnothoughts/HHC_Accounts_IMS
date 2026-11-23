@@ -227,6 +227,14 @@ export default function VendorForm() {
       if (!form.vendorName?.trim()) e.vendorName = "Vendor name is required";
       if (!form.mobile?.trim()) e.mobile = "Mobile is required";
 
+      // Email is compulsory for new vendors. On edit it is required only if
+      // the record already had one, so legacy vendors stay editable.
+      const emailRequired = !isEdit || Boolean(savedVendor?.email);
+      if (!form.email?.trim()) {
+        if (emailRequired) e.email = "Email is required";
+      } else if (!VENDOR_MASTER.EMAIL_REGEX.test(form.email.trim()))
+        e.email = "Invalid email (e.g. vendor@example.com)";
+
       if (mode === "new-master" && !form.panNumber?.trim())
         e.panNumber = "PAN number is required";
       else if (
@@ -275,6 +283,7 @@ export default function VendorForm() {
     branch: 0,
     vendorName: 0,
     mobile: 0,
+    email: 0,
     vendorType: 1,
     panNumber: 1,
     gstNumber: 1,
@@ -752,7 +761,12 @@ export default function VendorForm() {
                           maxLength: 10,
                         })}
                       </Field>
-                      <Field label="Email">
+                      <Field
+                        label={
+                          !isEdit || savedVendor?.email ? "Email *" : "Email"
+                        }
+                        error={errors.email}
+                      >
                         {input("email", {
                           placeholder: "vendor@email.com",
                           type: "email",

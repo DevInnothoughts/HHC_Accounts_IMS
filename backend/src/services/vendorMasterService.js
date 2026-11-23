@@ -196,6 +196,18 @@ const gstError = (gst, pan) => {
   return null;
 };
 
+// Validate a vendor email. Returns an error message or null.
+// required = true on create (email is compulsory for new vendors), and on
+// edit when the record already has one (it may be changed, not removed).
+// Legacy vendors without an email can still be edited without adding one.
+const emailError = (email, required) => {
+  const e = normVal(email).toLowerCase();
+  if (!e) return required ? "Email is required" : null;
+  if (!VENDOR_MASTER.EMAIL_REGEX.test(e))
+    return "Invalid email (e.g. vendor@example.com)";
+  return null;
+};
+
 // Rebuild master.gstins from the master's primary GSTIN and the GSTINs of
 // every branch vendor linked to it. Idempotent: always derived from the
 // rows, so it can never drift. GSTINs that do not belong to the master's
@@ -305,5 +317,6 @@ module.exports = {
   blankEnumsToUndefined,
   gstMatchesPan,
   gstError,
+  emailError,
   refreshMasterGstins,
 };

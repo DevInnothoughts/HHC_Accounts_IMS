@@ -167,6 +167,8 @@ module.exports = {
     PAN_REGEX: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
     IFSC_REGEX: /^[A-Z]{4}0[A-Z0-9]{6}$/,
     GST_REGEX: /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d][Z][A-Z\d]$/,
+    // Vendor email — compulsory when adding a new vendor (Nov 2026).
+    EMAIL_REGEX: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/,
   },
 
   // Fields each BRANCH vendor keeps for itself even when it is linked to a

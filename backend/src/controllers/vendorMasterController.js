@@ -436,6 +436,10 @@ exports.createMaster = async (req, res) => {
     }
     data.panNumber = pan;
 
+    // Email is compulsory for every new vendor.
+    const emailErr = svc.emailError(data.email, true);
+    if (emailErr) return res.status(400).json({ message: emailErr });
+
     const gstErr = svc.gstError(data.gstNumber, pan);
     if (gstErr) return res.status(400).json({ message: gstErr });
 
@@ -621,6 +625,17 @@ exports.updateMaster = async (req, res) => {
     }
 
     const data = svc.blankEnumsToUndefined(pick(req.body, EDITABLE_FIELDS));
+
+    // Email: checked only when it changes (legacy masters without one stay
+    // editable); an existing email may be changed but not removed.
+    if (
+      data.email !== undefined &&
+      svc.normVal(data.email).toLowerCase() !==
+        svc.normVal(master.email).toLowerCase()
+    ) {
+      const emailErr = svc.emailError(data.email, Boolean(master.email));
+      if (emailErr) return res.status(400).json({ message: emailErr });
+    }
 
     if (data.panNumber !== undefined) {
       const pan = VendorMaster.normalizePan(data.panNumber);

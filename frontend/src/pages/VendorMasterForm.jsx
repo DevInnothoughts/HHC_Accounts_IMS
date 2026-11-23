@@ -181,8 +181,13 @@ export default function VendorMasterForm() {
       e.panNumber = "Invalid PAN (e.g. ABCDE1234F)";
     if (!form.vendorName.trim()) e.vendorName = "Vendor name is required";
     if (!form.mobile.trim()) e.mobile = "Mobile is required";
-    if (form.email && !/^\S+@\S+\.\S+$/.test(form.email))
-      e.email = "Invalid email";
+    // Email is compulsory for new vendors. On edit it is required only if
+    // the master already had one, so legacy masters stay editable.
+    const emailRequired = !isEdit || Boolean(original?.email);
+    if (!form.email?.trim()) {
+      if (emailRequired) e.email = "Email is required";
+    } else if (!VENDOR_MASTER.EMAIL_REGEX.test(form.email.trim()))
+      e.email = "Invalid email (e.g. vendor@example.com)";
     if (form.gstNumber && !VENDOR_MASTER.GST_REGEX.test(form.gstNumber))
       e.gstNumber = "Invalid GST format";
     else if (form.gstNumber && !gstMatchesPan(form.gstNumber, form.panNumber))
@@ -454,7 +459,10 @@ export default function VendorMasterForm() {
                     maxLength: 10,
                   })}
                 </Field>
-                <Field label="Email" error={errors.email}>
+                <Field
+                  label={!isEdit || original?.email ? "Email *" : "Email"}
+                  error={errors.email}
+                >
                   {input("email", {
                     placeholder: "vendor@email.com",
                     type: "email",

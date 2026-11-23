@@ -109,6 +109,7 @@ export const VENDOR_MASTER = {
   PAN_REGEX: /^[A-Z]{5}[0-9]{4}[A-Z]$/,
   IFSC_REGEX: /^[A-Z]{4}0[A-Z0-9]{6}$/,
   GST_REGEX: /^\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d][Z][A-Z\d]$/,
+  EMAIL_REGEX: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/,
 };
 
 // GSTIN is NOT in this list: it is kept per branch (GST registration is
