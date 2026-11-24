@@ -1,11 +1,12 @@
 // ============================================================
-// BACKEND: src/services/enetExcelService.js — NEW FILE
+// BACKEND: src/services/enetExcelService.js
 // ------------------------------------------------------------
-// "Master Vendor Payment" e-Net bulk upload sheet.
+// "Master Vendor Payment" e-Net bulk upload file — CSV.
+// (File name kept so existing imports don't change.)
 //
 // Layout copied from Master_Vendor_Payment_Enet_Sample.xlsx and
-// machine-parsed by the bank, so it is FIXED: one sheet, 28 columns
-// (A–AB), header on row 1, one payment per row from row 2. The
+// machine-parsed by the bank, so it is FIXED: 28 columns (A–AB),
+// header on line 1, one payment per line from line 2. The
 // "Blank" columns are part of the format — header kept, cells empty.
 //
 //   A  Transaction Type - N      always "N"
@@ -18,7 +19,6 @@
 //   Y  IFC Code                  (header spelt as in the bank sample)
 //   AB Beneficiary email id
 // ============================================================
-const ExcelJS = require("exceljs");
 const {
   buildBankRemark,
   clean,
@@ -27,8 +27,8 @@ const {
   MAX,
 } = require("./fedOneExcelService");
 
-// Column letters A..AB, header text and widths exactly as in the sample.
-// Widths the sample doesn't set use Excel's default.
+// Column letters A..AB and header text exactly as in the sample.
+// (Widths are unused in CSV; kept as a record of the sample layout.)
 const ENET_COLUMNS = [
   { header: "Transaction Type - N", key: "txnType", width: 19.89 },
   { header: "Blank", key: "b1", width: 15.11 },
@@ -60,21 +60,10 @@ const ENET_COLUMNS = [
   { header: "Beneficiary email id", key: "beneEmail", width: 19.55 },
 ];
 
-// Text-formatted in the sample. Account numbers especially: as numbers,
-// leading zeros vanish and long ones go scientific.
-const TEXT_KEYS = [
-  "txnType",
-  "beneAccount",
-  "beneName",
-  "narrationVendor",
-  "narrationOwn",
-  "valueDate",
-  "ifsc",
-  "beneEmail",
-];
-
-const HEADER_FONT = { name: "Arial", size: 10, bold: true };
-const BODY_FONT = { name: "Calibri", size: 11 };
+// CSV has no cell types, so every value goes out as plain text exactly as
+// built below — account numbers keep their leading zeros in the file.
+// (Opening and re-saving the file in Excel will strip them; upload the
+// downloaded file as-is.)
 
 const validateForEnet = (payment) => {
   const errors = [];
@@ -119,34 +108,31 @@ const buildEnetRow = (payment) => {
   };
 };
 
-const buildEnetWorkbook = (payments) => {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "PMS — Healing Hands Clinic";
-  workbook.created = new Date();
+// RFC 4180 quoting: wrap in quotes only when the value holds a comma,
+// quote or line break; inner quotes are doubled. Values here are already
+// cleaned to [A-Za-z0-9 ./-], so in practice nothing gets quoted.
+const csvCell = (value) => {
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+};
 
-  const sheet = workbook.addWorksheet("Sheet1");
-  sheet.columns = ENET_COLUMNS;
-  sheet.getRow(1).eachCell((cell) => {
-    cell.font = HEADER_FONT;
-    cell.numFmt = "@";
-  });
+// Header row + one row per payment, CRLF line endings, no BOM
+// (a BOM would land in the bank parser's first header cell).
+const buildEnetCsv = (payments) => {
+  const lines = [ENET_COLUMNS.map((c) => csvCell(c.header)).join(",")];
 
   payments.forEach((payment) => {
-    const row = sheet.addRow(buildEnetRow(payment));
-    row.font = BODY_FONT;
-    TEXT_KEYS.forEach((key) => {
-      row.getCell(key).numFmt = "@";
-    });
-    // Number value, as in the sample. General shows 6785 / 6785.5 —
-    // no thousands separators or currency symbol for the parser to trip on.
-    row.getCell("amount").numFmt = "General";
+    const row = buildEnetRow(payment);
+    // "Blank" columns have no value in the row object -> empty cell.
+    // Amount is a plain number (6785 / 6785.5) — no separators or symbol.
+    lines.push(ENET_COLUMNS.map((c) => csvCell(row[c.key])).join(","));
   });
 
-  return workbook;
+  return lines.join("\r\n") + "\r\n";
 };
 
 module.exports = {
-  buildEnetWorkbook,
+  buildEnetCsv,
   validateForEnet,
   ENET_COLUMNS,
 };

@@ -491,7 +491,7 @@ export default function PaymentProcessing() {
     }
   };
 
-  // e-Net "Master Vendor Payment" sheet — same flow as FedOne.
+  // e-Net "Master Vendor Payment" file (CSV) — same flow as FedOne.
   const handleGenerateEnetExcel = async (paymentId, label) => {
     try {
       const res = await api.post(
@@ -499,10 +499,10 @@ export default function PaymentProcessing() {
         {},
         { responseType: "blob" },
       );
-      saveBlob(res.data, `Enet_${label || paymentId}.xlsx`);
+      saveBlob(res.data, `Enet_${label || paymentId}.csv`, "text/csv");
       fetchData();
     } catch (err) {
-      setError(await readBlobError(err, "e-Net Excel generation failed"));
+      setError(await readBlobError(err, "e-Net CSV generation failed"));
     }
   };
 
@@ -644,11 +644,11 @@ export default function PaymentProcessing() {
         { paymentIds: selectedIds },
         { responseType: "blob" },
       );
-      saveBlob(res.data, `Enet_Payments_${istToday()}.xlsx`);
+      saveBlob(res.data, `Enet_Payments_${istToday()}.csv`, "text/csv");
       // Selection kept, as for FedOne — "Documents" usually comes next.
       fetchData();
     } catch (err) {
-      setError(await readBlobError(err, "e-Net Excel generation failed"));
+      setError(await readBlobError(err, "e-Net CSV generation failed"));
     } finally {
       setBulkGenerating(false);
     }
@@ -1353,7 +1353,7 @@ export default function PaymentProcessing() {
                     >
                       {bulkGenerating
                         ? "⏳ Generating..."
-                        : `🏧 e-Net Excel (${selectedIds.length})`}
+                        : `🏧 e-Net CSV (${selectedIds.length})`}
                     </button>
 
                     {/* Invoice attachments for the ticked payments whose

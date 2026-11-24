@@ -18,7 +18,7 @@ const {
   resolveReference,
 } = require("../services/fedOneExcelService");
 const {
-  buildEnetWorkbook,
+  buildEnetCsv,
   validateForEnet,
 } = require("../services/enetExcelService");
 const fs = require("fs");
@@ -1435,10 +1435,9 @@ const ENET_ELIGIBLE = [
   PAYMENT_STATUS.ACCOUNTS_APPROVED,
   PAYMENT_STATUS.EXCEL_GENERATED,
 ];
-const XLSX_MIME =
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const CSV_MIME = "text/csv; charset=utf-8";
 
-// POST /api/payments/:id/enet-excel
+// POST /api/payments/:id/enet-excel   (returns CSV; route name unchanged)
 exports.generateEnetExcel = async (req, res) => {
   try {
     const payment = await PaymentProcessing.findById(req.params.id).populate(
@@ -1482,13 +1481,13 @@ exports.generateEnetExcel = async (req, res) => {
         : "e-Net Excel Generation",
       approvedBy: req.user._id,
       action: "approved",
-      remarks: "e-Net bank upload sheet generated",
+      remarks: "e-Net bank upload file (CSV) generated",
       actionAt: new Date(),
     });
     payment.excelGeneratedAt = new Date();
     await payment.save();
 
-    const workbook = buildEnetWorkbook([payment]);
+    const csv = buildEnetCsv([payment]);
 
     await logAction({
       userId: req.user._id,
@@ -1500,17 +1499,16 @@ exports.generateEnetExcel = async (req, res) => {
       req,
     });
 
-    res.setHeader("Content-Type", XLSX_MIME);
+    res.setHeader("Content-Type", CSV_MIME);
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="Enet_${payment.paymentId}_${Date.now()}.xlsx"`,
+      `attachment; filename="Enet_${payment.paymentId}_${Date.now()}.csv"`,
     );
-    await workbook.xlsx.write(res);
-    res.end();
+    res.send(csv);
   } catch (err) {
-    console.error("e-Net Excel error:", err);
+    console.error("e-Net CSV error:", err);
     if (!res.headersSent)
-      res.status(500).json({ message: "e-Net Excel generation failed" });
+      res.status(500).json({ message: "e-Net CSV generation failed" });
     else res.destroy(err);
   }
 };
@@ -1550,7 +1548,7 @@ exports.bulkGenerateEnetExcel = async (req, res) => {
       });
     }
 
-    const workbook = buildEnetWorkbook(payments);
+    const csv = buildEnetCsv(payments);
 
     await PaymentProcessing.updateMany(
       { _id: { $in: payments.map((p) => p._id) } },
@@ -1565,7 +1563,7 @@ exports.bulkGenerateEnetExcel = async (req, res) => {
             stage: "e-Net Excel Generation",
             approvedBy: req.user._id,
             action: "approved",
-            remarks: "e-Net bank upload sheet generated (bulk)",
+            remarks: "e-Net bank upload file (CSV) generated (bulk)",
             actionAt: new Date(),
           },
         },
@@ -1583,17 +1581,16 @@ exports.bulkGenerateEnetExcel = async (req, res) => {
       req,
     });
 
-    res.setHeader("Content-Type", XLSX_MIME);
+    res.setHeader("Content-Type", CSV_MIME);
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename="Enet_Payments_${istDateStamp()}.xlsx"`,
+      `attachment; filename="Enet_Payments_${istDateStamp()}.csv"`,
     );
-    await workbook.xlsx.write(res);
-    res.end();
+    res.send(csv);
   } catch (err) {
-    console.error("Bulk e-Net Excel error:", err);
+    console.error("Bulk e-Net CSV error:", err);
     if (!res.headersSent)
-      res.status(500).json({ message: "e-Net Excel generation failed" });
+      res.status(500).json({ message: "e-Net CSV generation failed" });
     else res.destroy(err);
   }
 };
