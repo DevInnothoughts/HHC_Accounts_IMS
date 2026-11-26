@@ -5,6 +5,7 @@ import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { ROLES, INVOICE_WORKFLOW } from "../config/constants.js";
+import { PartPaymentBadge } from "../components/PaymentPlanWidgets.jsx";
 import {
   AttachmentChips,
   AttachmentPreview,
@@ -60,6 +61,9 @@ export default function InvoiceRequests() {
       branch: searchParams.get("branch") || "",
       from: searchParams.get("from") || "",
       to: searchParams.get("to") || "",
+      // Nov 2026 — Part Payments tab
+      partPayments: searchParams.get("partPayments") || "",
+      partAwaitingMe: searchParams.get("partAwaitingMe") || "",
     };
     if (Object.values(urlFilters).some((v) => v)) return urlFilters;
     return { ...urlFilters, ...(savedState.filters || {}), priority: "" };
@@ -79,6 +83,18 @@ export default function InvoiceRequests() {
   // Selection is kept by id with the row data, so the summary popup can
   // list invoices even after the user pages or filters away from them.
   const isClusterHead = user?.role === ROLES.CLUSTER_HEAD;
+  // Nov 2026 — roles that approve later parts of part-payment invoices
+  const isPartApprover = [
+    ROLES.BRANCH_PARTNER,
+    ROLES.ACCOUNTS,
+    ROLES.CLUSTER_HEAD,
+  ].includes(user?.role);
+  const [partCount, setPartCount] = useState(0);
+  const partView = filters.partAwaitingMe
+    ? "mine"
+    : filters.partPayments
+      ? "open"
+      : "";
   const [selected, setSelected] = useState({}); // { [id]: invoice }
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkRemarks, setBulkRemarks] = useState("");
@@ -284,12 +300,20 @@ export default function InvoiceRequests() {
       const { data } = await api.get(`/invoices?${params}`);
       setInvoices(data.invoices || []);
       setTotal(data.total || 0);
+      // Count on the Part Payments tab: parts waiting for me (approvers) or
+      // open part-payment invoices (branch users).
+      api
+        .get(
+          `/invoices?${isPartApprover ? "partAwaitingMe" : "partPayments"}=true&limit=1`,
+        )
+        .then((r) => setPartCount(r.data?.total || 0))
+        .catch(() => {});
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch, filters]);
+  }, [page, debouncedSearch, filters, isPartApprover]);
 
   useEffect(() => {
     fetchInvoices();
@@ -330,6 +354,41 @@ export default function InvoiceRequests() {
             >
               + New Invoice
             </button>
+          )}
+        </div>
+
+        {/* Nov 2026 — All / Part Payments */}
+        <div style={PT.row}>
+          {[
+            ["", "📋 All Invoices"],
+            ["open", "⚡ Part Payments"],
+            ...(isPartApprover ? [["mine", "🔔 Parts Awaiting Me"]] : []),
+          ].map(([v, l]) => (
+            <button
+              key={l}
+              style={{ ...PT.tab, ...(partView === v ? PT.tabOn : {}) }}
+              onClick={() => {
+                setFilters((f) => ({
+                  ...f,
+                  partPayments: v === "open" ? "true" : "",
+                  partAwaitingMe: v === "mine" ? "true" : "",
+                }));
+                setSelected({});
+                setPage(1);
+              }}
+            >
+              {l}
+              {((isPartApprover && v === "mine") ||
+                (!isPartApprover && v === "open")) &&
+                partCount > 0 && <span style={PT.count}>{partCount}</span>}
+            </button>
+          ))}
+          {partView && (
+            <span style={PT.hint}>
+              {partView === "mine"
+                ? "Later parts of part-payment invoices waiting for your approval. Open one to approve or reject the part."
+                : "Invoices paid in parts. Each stays here until the whole amount is paid. Open one to see its parts or request the next part."}
+            </span>
           )}
         </div>
 
@@ -413,6 +472,8 @@ export default function InvoiceRequests() {
                 branch: "",
                 from: "",
                 to: "",
+                partPayments: "",
+                partAwaitingMe: "",
               });
               setPage(1);
             }}
@@ -550,6 +611,13 @@ export default function InvoiceRequests() {
                       </td>
                       <td style={{ ...S.td, fontWeight: 600 }}>
                         ₹{inv.netPayable?.toLocaleString("en-IN")}
+                        {inv.paymentPlanSummary?.plan && (
+                          <div style={{ marginTop: 4 }}>
+                            <PartPaymentBadge
+                              summary={inv.paymentPlanSummary}
+                            />
+                          </div>
+                        )}
                       </td>
                       <td style={S.td}>
                         <span
@@ -1224,4 +1292,38 @@ const S = {
     color: C.primary,
   },
   pageInfo: { fontSize: 13, color: "#666" },
+};
+
+// Nov 2026 — Part Payments tab
+const PT = {
+  row: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
+    flexWrap: "wrap",
+  },
+  tab: {
+    padding: "8px 14px",
+    borderRadius: 999,
+    border: "1px solid #e2e8f0",
+    background: "#fff",
+    color: "#475569",
+    fontWeight: 600,
+    fontSize: 13,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+  },
+  tabOn: { borderColor: "#0198A3", background: "#ecfeff", color: "#066A92" },
+  count: {
+    background: "#F97C7A",
+    color: "#fff",
+    borderRadius: 999,
+    fontSize: 11,
+    padding: "1px 7px",
+    fontWeight: 700,
+  },
+  hint: { fontSize: 12, color: "#64748b" },
 };

@@ -6,6 +6,10 @@ import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import DuplicateInvoiceChecker from "../components/DuplicateInvoiceChecker.jsx";
 import FileUpload from "../components/FileUpload.jsx";
+import {
+  PaymentModeField,
+  partAmountError,
+} from "../components/PaymentPlanWidgets.jsx";
 import InvoiceItemsEditor from "../components/InvoiceItemsEditor.jsx";
 import {
   invoiceGstBreakup,
@@ -23,6 +27,16 @@ const EXPENSE_TYPES = ["Revenue", "Capital"];
 // ✅ Single source of truth for the on-screen net payable:
 // Base + GST ± Round Off − Special Discount − Cash Discount − TDS
 const num = (v) => parseFloat(v) || 0;
+// Payable before TDS — what a part payment is measured against.
+const grossPayableOf = (f) =>
+  Math.round(
+    (num(f.amount) +
+      num(f.gstAmount) +
+      num(f.roundOff) -
+      num(f.specialDiscount) -
+      num(f.cashDiscount)) *
+      100,
+  ) / 100;
 const computeNet = (f) =>
   (
     num(f.amount) +
@@ -127,6 +141,12 @@ export default function EditPaymentRequest() {
                 : [],
           tdsAmount: r.tdsAmount ?? 0,
           netPayable: r.netPayable || "",
+          // ✅ Nov 2026 — Full / Partial payment
+          paymentMode: r.paymentPlan?.mode === "partial" ? "partial" : "full",
+          partialAmount:
+            r.paymentPlan?.mode === "partial"
+              ? String(r.paymentPlan.parts?.[0]?.amount ?? "")
+              : "",
           invoiceNumber: r.invoiceNumber || "",
           invoiceDate: r.invoiceDate ? r.invoiceDate.split("T")[0] : "",
           dueDate: r.dueDate ? r.dueDate.split("T")[0] : "",
@@ -249,6 +269,15 @@ export default function EditPaymentRequest() {
       if (num(form.specialDiscount) + num(form.cashDiscount) > invoiceTotal)
         e.discount =
           "Total discount cannot exceed the invoice total (Base + GST ± Round Off)";
+      // ✅ Part payment: part 1 must be less than the payable amount
+      if (form.paymentMode === "partial") {
+        const pe = partAmountError(
+          form.partialAmount,
+          grossPayableOf(form),
+          true,
+        );
+        if (pe) e.partialAmount = pe;
+      }
     }
     if (s === 2) {
       if (!form.invoiceNumber?.trim())
@@ -711,6 +740,22 @@ export default function EditPaymentRequest() {
                   </div>
                 </div>
               </div>
+
+              {/* ✅ Nov 2026 — Full / Partial payment */}
+              <PaymentModeField
+                grossPayable={grossPayableOf(form)}
+                mode={form.paymentMode}
+                amount={form.partialAmount}
+                onMode={(m) => {
+                  setForm((f) => ({ ...f, paymentMode: m }));
+                  setErrors((er) => ({ ...er, partialAmount: "" }));
+                }}
+                onAmount={(v) => {
+                  setForm((f) => ({ ...f, partialAmount: v }));
+                  setErrors((er) => ({ ...er, partialAmount: "" }));
+                }}
+                error={errors.partialAmount}
+              />
             </div>
           )}
 
@@ -885,6 +930,14 @@ export default function EditPaymentRequest() {
                 </ReviewSection>
 
                 <ReviewSection title="Invoice Details">
+                  <ReviewRow
+                    label="Payment"
+                    value={
+                      form.paymentMode === "partial"
+                        ? `Partial — Part 1: ₹${num(form.partialAmount).toLocaleString("en-IN", { minimumFractionDigits: 2 })} now, balance later`
+                        : "Full"
+                    }
+                  />
                   <ReviewRow
                     label="Invoice Number"
                     value={form.invoiceNumber}

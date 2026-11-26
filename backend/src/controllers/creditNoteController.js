@@ -18,6 +18,7 @@ const PaymentProcessing = require("../models/PaymentProcessing");
 const User = require("../models/User");
 const { ROLES, INVOICE_STATUS } = require("../config/constants");
 const { logAction } = require("../services/auditService");
+const { activePartOf } = require("../utils/paymentPlan");
 const { sendNotificationEmail } = require("../services/emailService");
 const {
   uploadFile,
@@ -79,6 +80,14 @@ const checkInvoice = async (invoice) => {
     return {
       status: 409,
       message: `A payment for this invoice is in progress (${payment.status}). Wait until its UTR is recorded, or reject it, then add the credit note.`,
+    };
+  // Part payments (Nov 2026): not while a part is moving through approval —
+  // its TDS and amount are being decided on the current figures.
+  const activePart = activePartOf(invoice);
+  if (activePart)
+    return {
+      status: 409,
+      message: `Part ${activePart.partNo} of this invoice is in approval (${activePart.status}). Wait until it is approved or rejected, then add the credit note.`,
     };
   return { payment };
 };

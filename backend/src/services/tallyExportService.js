@@ -252,6 +252,14 @@ const finish = (v) => {
   return { ...v, drTotal: dr, crTotal: cr };
 };
 
+// Part payments (Nov 2026): TDS is deducted part by part. The invoice
+// voucher carries part 1's TDS; each later part's TDS goes out as its own
+// journal (buildPartTdsVoucher), on the day Accounts approved that part.
+const part1Of = (inv) =>
+  inv.paymentPlan?.mode === "partial"
+    ? (inv.paymentPlan.parts || []).find((p) => Number(p.partNo) === 1)
+    : null;
+
 const buildInvoiceVoucher = (inv) => {
   const warnings = [];
   const category = inv.expenseCategory || {};
@@ -259,6 +267,14 @@ const buildInvoiceVoucher = (inv) => {
   const pharmacy = isPharmacy(category);
   const gstType = resolveGstType(inv);
   const fig = originalFigures(inv);
+  const part1 = part1Of(inv);
+  if (part1) {
+    fig.tdsAmount = round2(part1.tdsAmount);
+    inv = { ...inv, tdsPercentage: part1.tdsPercentage };
+    warnings.push(
+      "Part-payment invoice — TDS here is on Part 1 only; later parts' TDS go as separate journals",
+    );
+  }
   const lines = invoiceLines(inv, fig);
   const groups = groupByRate(lines, gstType);
 
@@ -477,8 +493,59 @@ const toRows = (vouchers) => {
   return rows;
 };
 
+// ── Part TDS journal (Nov 2026) ────────────────────────────
+// TDS on a later part of a part-payment invoice: Dr vendor / Cr TDS ledger.
+const buildPartTdsVoucher = (inv, part) => {
+  const warnings = [];
+  const category = inv.expenseCategory || {};
+  const vendorName = inv.vendor?.vendorName || "";
+  const tdsAmt = round2(part.tdsAmount);
+  const tds = resolveTdsSection(part.tdsPercentage, category.name);
+  if (!vendorName) warnings.push("Vendor name missing");
+  if (!tds.section)
+    warnings.push(
+      `TDS section not identified (${fmtRate(part.tdsPercentage)}%) — ledger "${LEDGERS.TDS_UNKNOWN}" used`,
+    );
+  else if (!tds.sure)
+    warnings.push(
+      `TDS section ${tds.section} assumed from ${fmtRate(part.tdsPercentage)}% — please check`,
+    );
+  if (part.status !== "Approved")
+    warnings.push("Part not yet approved by the Cluster Head");
+  const lines = [
+    { ledger: vendorName, amount: tdsAmt, side: "Dr" },
+    { ledger: tdsLedger(tds.section), amount: tdsAmt, side: "Cr" },
+  ];
+  return finish({
+    kind: "invoice_part",
+    sourceId: `${inv._id}:${part.partNo}`,
+    invoiceId: String(inv._id),
+    partNo: part.partNo,
+    voucherDate: part.tdsAppliedAt,
+    voucherType: "Journal",
+    voucherNumber: `${inv.requestId}-P${part.partNo}`,
+    refNumber: inv.invoiceNumber,
+    refDate: inv.invoiceDate,
+    narration: [
+      `Being TDS ${tds.section || ""} @ ${fmtRate(part.tdsPercentage)}% deducted on part ${part.partNo} payment — ${vendorName} inv ${inv.invoiceNumber} dt ${fmtDate(inv.invoiceDate)}`.replace(
+        "  ",
+        " ",
+      ),
+      `Part ${inr(part.amount)} · taxable ${inr(part.taxableAmount)} · TDS ${inr(tdsAmt)}`,
+      `PMS ${inv.requestId}`,
+    ].join(" | "),
+    vendorName,
+    gstType: resolveGstType(inv),
+    pmsNetPayable: round2(part.netAmount),
+    lines,
+    warnings,
+    exportedAt: part.tallyExport?.exportedAt || null,
+  });
+};
+
 module.exports = {
   TALLY_COLUMNS,
+  buildPartTdsVoucher,
   PHARMACY_CATEGORIES,
   LEDGERS,
   buildInvoiceVoucher,

@@ -5,6 +5,7 @@ import api from "../api/axios";
 import Sidebar from "../components/Sidebar.jsx";
 import { useAuth } from "../context/AuthContext.jsx";
 import { invoiceGstBreakup, gstTypeLabel, GST_TYPES } from "../utils/gst";
+import { PartPaymentsPanel } from "../components/PaymentPlanWidgets.jsx";
 
 const STATUS_STYLES = {
   "Payment Pending": { bg: "#f1f5f9", color: "#475569", icon: "⏳" },
@@ -685,6 +686,20 @@ export default function PaymentDetail() {
               ))
             )}
           </InfoCard>
+
+          {/* Nov 2026 — part payments (read-only here) */}
+          {payment.paymentPlanSummary?.plan && (
+            <div style={{ gridColumn: "1 / -1" }}>
+              <PartPaymentsPanel
+                invoice={{
+                  ...payment.invoiceRequest,
+                  paymentPlanSummary: payment.paymentPlanSummary,
+                }}
+                user={user}
+                readOnly
+              />
+            </div>
+          )}
 
           {/* Payment Installments (partial payments) */}
           {payment.installments?.length > 1 && (

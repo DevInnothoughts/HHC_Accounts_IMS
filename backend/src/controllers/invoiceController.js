@@ -55,6 +55,7 @@ const {
   derivedStoredShape,
 } = require("../utils/paymentCycle");
 const access = require("../utils/vendorAccess");
+const plan = require("../utils/paymentPlan");
 
 // ── Can this branch raise an invoice against this vendor right now? ──
 // Returns null when allowed, or { status, body } to send back.
@@ -197,6 +198,66 @@ const withDerivedCycle = (doc) => {
   return obj;
 };
 
+// ── Part payments (Nov 2026) ────────────────────────────────
+// The form sends paymentMode ("full" | "partial") and partialAmount. The
+// plan itself is always built here — a client-sent paymentPlan is ignored.
+// Returns { plan } (null = full payment), { keep: true } when the request
+// says nothing about the payment mode, or { error }.
+const planFromRequest = (body, grossPayable, user, existingPlan) => {
+  const mode = body?.paymentMode;
+  if (mode === undefined || mode === null || mode === "") {
+    if (!existingPlan) return { plan: null };
+    // Mode not sent: keep the stored plan, but it must still fit.
+    const part1 = existingPlan.parts?.[0];
+    const v = plan.validatePartAmount(part1?.amount, grossPayable, {
+      strictlyLess: true,
+    });
+    if (v.error)
+      return {
+        error: `The part payment of ₹${plan.round2(part1?.amount).toLocaleString("en-IN")} no longer fits this invoice — ${v.error}`,
+      };
+    return { keep: true };
+  }
+  if (!["full", "partial"].includes(mode))
+    return { error: "Payment must be Full or Partial" };
+  if (mode === "full") return { plan: null };
+  const v = plan.validatePartAmount(body.partialAmount, grossPayable, {
+    strictlyLess: true,
+  });
+  if (v.error) return { error: v.error };
+  return {
+    plan: {
+      mode: "partial",
+      parts: [
+        {
+          partNo: 1,
+          amount: v.amount,
+          status: plan.PART_STATUS.DRAFT,
+          requestedBy: user._id,
+          requestedAt: new Date(),
+        },
+      ],
+    },
+  };
+};
+
+// Part 1 mirrors the invoice's own approval. Maps an invoice status to it.
+const PART1_STATUS_FOR = {
+  [INVOICE_STATUS.DRAFT]: plan.PART_STATUS.DRAFT,
+  [INVOICE_STATUS.SUBMITTED]: plan.PART_STATUS.SUBMITTED,
+  [INVOICE_STATUS.PARTNER_APPROVED]: plan.PART_STATUS.PARTNER_APPROVED,
+  [INVOICE_STATUS.ACCOUNTS_APPROVED]: plan.PART_STATUS.ACCOUNTS_APPROVED,
+  [INVOICE_STATUS.CLUSTER_APPROVED]: plan.PART_STATUS.APPROVED,
+  [INVOICE_STATUS.REJECTED]: plan.PART_STATUS.REJECTED,
+};
+const firstPart = (invoice) =>
+  plan.isPartPlan(invoice) ? invoice.paymentPlan.parts[0] : null;
+const pushPartHistory = (part, entry) => {
+  if (!part) return;
+  part.history = part.history || [];
+  part.history.push({ at: new Date(), ...entry });
+};
+
 exports.createInvoice = async (req, res) => {
   try {
     const { branch, vendor, expenseType, invoiceNumber, items } = req.body;
@@ -265,6 +326,20 @@ exports.createInvoice = async (req, res) => {
       Object.assign(payload, gstFields);
     }
     const netPayable = payload.netPayable;
+
+    // ✅ Nov 2026 — Full / Partial payment, chosen by the branch user.
+    delete payload.paymentPlan;
+    const planResult = planFromRequest(
+      req.body,
+      plan.grossPayableOf(payload),
+      req.user,
+      null,
+    );
+    if (planResult.error)
+      return res.status(400).json({ message: planResult.error });
+    if (planResult.plan) payload.paymentPlan = planResult.plan;
+    delete payload.paymentMode;
+    delete payload.partialAmount;
 
     const dupCheck = await checkDuplicateInvoice(
       branch,
@@ -388,6 +463,38 @@ exports.submitInvoice = async (req, res) => {
       branches: invoice.branch,
       status: "active",
     });
+
+    // ✅ Nov 2026 — part payment: part 1 travels with the invoice.
+    const part1 = firstPart(invoice);
+    if (part1) {
+      const v = plan.validatePartAmount(
+        part1.amount,
+        plan.grossPayableOf(invoice),
+        { strictlyLess: true },
+      );
+      if (v.error) {
+        return res.status(400).json({
+          message: `Part payment: ${v.error}. Edit the invoice and correct the amount.`,
+        });
+      }
+      part1.status = plan.PART_STATUS.SUBMITTED;
+      part1.partnerSkipped = branchPartnerExists ? undefined : true;
+      part1.requestedBy = part1.requestedBy || req.user._id;
+      part1.requestedAt = new Date();
+      // A resubmit after rejection starts the part afresh.
+      part1.taxableAmount = undefined;
+      part1.tdsPercentage = undefined;
+      part1.tdsAmount = undefined;
+      part1.netAmount = undefined;
+      part1.tdsAppliedAt = undefined;
+      part1.approvedAt = undefined;
+      pushPartHistory(part1, {
+        stage: "Submitted with invoice",
+        by: req.user._id,
+        action: "requested",
+      });
+      invoice.markModified("paymentPlan");
+    }
 
     if (branchPartnerExists) {
       // ✅ Normal flow — goes to partner first
@@ -574,27 +681,41 @@ const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
           body: { message: "TDS percentage must be between 0 and 100" },
         };
       }
-      // Recalculate TDS amount and net payable from the base amount.
-      // Recomputed, never decremented, so a repeat pass cannot compound it.
-      invoice.tdsPercentage = tds;
-      invoice.tdsAmount = Math.round((invoice.amount * tds) / 100);
-      invoice.netPayable = parseFloat(
-        (
-          invoice.amount +
-          (invoice.gstAmount || 0) +
-          (invoice.roundOff || 0) -
-          totalDiscount(invoice) - // ✅ special + cash discount (0 on old invoices)
-          invoice.tdsAmount
-        ).toFixed(2),
-      );
-      if (invoice.netPayable < 0) {
-        return {
-          status: 400,
-          body: {
-            message:
-              "Net payable would be negative after discounts and TDS — please correct the discount or TDS %",
-          },
-        };
+      // ✅ Nov 2026 — part payment: TDS on part 1 only. Later parts get
+      // their own TDS when Accounts approves them.
+      const part1 = firstPart(invoice);
+      if (part1) {
+        const t = plan.computePartTds(invoice, part1, tds);
+        if (t.error) return { status: 400, body: { message: t.error } };
+        Object.assign(part1, t, {
+          tdsAppliedAt: new Date(),
+          status: plan.PART_STATUS.ACCOUNTS_APPROVED,
+        });
+        plan.applyPlanTotals(invoice);
+        invoice.markModified("paymentPlan");
+      } else {
+        // Recalculate TDS amount and net payable from the base amount.
+        // Recomputed, never decremented, so a repeat pass cannot compound it.
+        invoice.tdsPercentage = tds;
+        invoice.tdsAmount = Math.round((invoice.amount * tds) / 100);
+        invoice.netPayable = parseFloat(
+          (
+            invoice.amount +
+            (invoice.gstAmount || 0) +
+            (invoice.roundOff || 0) -
+            totalDiscount(invoice) - // ✅ special + cash discount (0 on old invoices)
+            invoice.tdsAmount
+          ).toFixed(2),
+        );
+        if (invoice.netPayable < 0) {
+          return {
+            status: 400,
+            body: {
+              message:
+                "Net payable would be negative after discounts and TDS — please correct the discount or TDS %",
+            },
+          };
+        }
       }
     }
 
@@ -626,6 +747,29 @@ const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
       remarks: remarks || "",
       actionAt: new Date(),
     });
+
+    // ✅ Nov 2026 — part 1 follows the invoice through the chain.
+    const approvedPart1 = firstPart(invoice);
+    if (approvedPart1) {
+      approvedPart1.status =
+        PART1_STATUS_FOR[step.nextStatus] || approvedPart1.status;
+      pushPartHistory(approvedPart1, {
+        stage: step.label,
+        by: req.user._id,
+        action: "approved",
+        remarks: remarks || "",
+      });
+      if (isFinalApproval) {
+        approvedPart1.approvedAt = new Date();
+        approvedPart1.paymentCycle = invoice.paymentCycle?.assigned
+          ? {
+              ...(invoice.paymentCycle.assigned.toObject?.() ||
+                invoice.paymentCycle.assigned),
+            }
+          : undefined;
+      }
+      invoice.markModified("paymentPlan");
+    }
 
     // Single atomic write: status, stage, history, TDS and payment cycle.
     await invoice.save();
@@ -664,8 +808,13 @@ const approveSingleInvoice = async (invoiceId, req, opts = {}) => {
         await notify(
           invoice.createdBy.email,
           `✅ Invoice Approved: ${invoice.requestId}`,
-          `<p>Your invoice <strong>${invoice.requestId}</strong> has been fully approved by the Cluster Head.</p>
-           <p>It has been forwarded to the <strong>Accounts team</strong> for payment processing — no further action is needed from you.</p>
+          `${
+            approvedPart1
+              ? `<p>Your invoice <strong>${invoice.requestId}</strong> has been approved by the Cluster Head for <strong>Part 1 — ₹${plan.round2(approvedPart1.amount).toLocaleString("en-IN")}</strong> (₹${plan.round2(approvedPart1.netAmount).toLocaleString("en-IN")} after TDS).</p>
+           <p>It has been forwarded to the <strong>Accounts team</strong> for payment. The balance of ₹${plan.unrequestedOf(invoice).toLocaleString("en-IN")} can be requested from <strong>Invoice Processing → Part Payments</strong> when it is due.</p>`
+              : `<p>Your invoice <strong>${invoice.requestId}</strong> has been fully approved by the Cluster Head.</p>
+           <p>It has been forwarded to the <strong>Accounts team</strong> for payment processing — no further action is needed from you.</p>`
+          }
            <div style="background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:12px;margin-top:12px;">
              <div style="font-size:13px;color:#0f766e;font-weight:600;">Payment Cycle</div>
              <div style="font-size:15px;color:#0f172a;font-weight:700;margin-top:4px;">
@@ -854,7 +1003,10 @@ exports.bulkApproveInvoices = async (req, res) => {
         approved.push({
           _id: inv._id,
           requestId: inv.requestId,
-          netPayable: inv.netPayable,
+          // Part payment: only part 1 is payable now
+          netPayable: plan.isPartPlan(inv)
+            ? plan.approvedNetOf(inv)
+            : inv.netPayable,
           branch: inv.branch?.name || null,
           vendor: inv.vendor?.vendorName || null,
           paymentCycle: inv.paymentCycle?.assigned || null,
@@ -940,6 +1092,20 @@ exports.rejectInvoice = async (req, res) => {
     const step = partnerSkipped
       ? { label: "Accounts Approval (Partner Skipped)" }
       : getWorkflowStep(invoice.status);
+
+    // ✅ Nov 2026 — part 1 is rejected with the invoice; its TDS drops out.
+    const rejectedPart1 = firstPart(invoice);
+    if (rejectedPart1) {
+      rejectedPart1.status = plan.PART_STATUS.REJECTED;
+      pushPartHistory(rejectedPart1, {
+        stage: step?.label || invoice.status,
+        by: req.user._id,
+        action: "rejected",
+        remarks: reason.trim(),
+      });
+      plan.applyPlanTotals(invoice);
+      invoice.markModified("paymentPlan");
+    }
 
     invoice.status = INVOICE_STATUS.REJECTED;
     invoice.currentStage = "branch";
@@ -1122,6 +1288,37 @@ exports.updateInvoice = async (req, res) => {
       updateData.cashDiscount
     ).toFixed(2);
 
+    // ✅ Nov 2026 — Full / Partial payment. Built here, never from the client.
+    delete updateData.paymentPlan;
+    {
+      const r = planFromRequest(
+        req.body,
+        updateData.netPayable, // = gross payable: TDS is not applied while editable
+        req.user,
+        plan.isPartPlan(invoice) ? invoice.paymentPlan.toObject() : null,
+      );
+      if (r.error) return res.status(400).json({ message: r.error });
+      if (!r.keep) {
+        if (r.plan) {
+          // Keep the part's place in the chain (Accounts may edit at
+          // Submitted / Partner Approved); TDS is applied later.
+          const prev = firstPart(invoice);
+          const part1 = r.plan.parts[0];
+          part1.status = PART1_STATUS_FOR[invoice.status] || part1.status;
+          if (prev) {
+            part1.partnerSkipped = prev.partnerSkipped;
+            part1.requestedBy = prev.requestedBy || part1.requestedBy;
+            part1.history = prev.history;
+          }
+          updateData.paymentPlan = r.plan;
+        } else if (plan.isPartPlan(invoice)) {
+          updateData.$unset = { paymentPlan: 1 };
+        }
+      }
+    }
+    delete updateData.paymentMode;
+    delete updateData.partialAmount;
+
     // ✅ Same vendor rules as createInvoice when the vendor or branch changes.
     const newVendor = updateData.vendor ?? invoice.vendor;
     const newBranch = updateData.branch ?? invoice.branch;
@@ -1195,6 +1392,8 @@ exports.getInvoices = async (req, res) => {
       from,
       to,
       search,
+      partPayments,
+      partAwaitingMe,
       page = 1,
       limit = 20,
     } = req.query;
@@ -1222,6 +1421,30 @@ exports.getInvoices = async (req, res) => {
     }
     if (status) query.status = status;
     if (priority) query.priority = priority;
+
+    // ✅ Nov 2026 — Part Payments list: part-payment invoices until the
+    // whole amount is paid. partAwaitingMe narrows it to invoices whose
+    // later part is waiting for the current user's role.
+    if (partPayments === "true" || partAwaitingMe === "true") {
+      query["paymentPlan.mode"] = "partial";
+      if (partAwaitingMe === "true") {
+        const f = plan.awaitingRoleFilter(req.user.role);
+        if (!f) query._id = { $in: [] };
+        else {
+          Object.assign(query, f.$or ? {} : f);
+          if (f.$or) query.$and = [...(query.$and || []), { $or: f.$or }];
+        }
+        query.status = INVOICE_STATUS.CLUSTER_APPROVED;
+      } else {
+        query.status = query.status || { $ne: INVOICE_STATUS.DRAFT };
+        const PaymentProcessing = require("../models/PaymentProcessing");
+        const settled = await PaymentProcessing.distinct("invoiceRequest", {
+          ...(query.branch ? { branch: query.branch } : {}),
+          status: { $in: plan.PAYMENT_CLOSED_STATUSES },
+        });
+        if (settled.length) query._id = { $nin: settled };
+      }
+    }
     if (from || to) {
       query.createdAt = {};
       if (from) query.createdAt.$gte = new Date(from);
@@ -1250,12 +1473,18 @@ exports.getInvoices = async (req, res) => {
       .populate("vendor", "vendorName companyName")
       .populate("expenseCategory", "name type")
       .populate("createdBy", "name email")
+      .populate("paymentRequest", "paymentId status paidAmount remainingAmount")
       .sort({ createdAt: -1 })
       .skip((page - 1) * limit)
       .limit(Number(limit));
 
     res.json({
-      invoices: invoices.map((i) => withGstSplit(withDerivedCycle(i))),
+      invoices: invoices.map((i) => {
+        const obj = withGstSplit(withDerivedCycle(i));
+        if (plan.isPartPlan(obj))
+          obj.paymentPlanSummary = plan.planSummary(obj);
+        return obj;
+      }),
       total,
       page: Number(page),
       pages: Math.ceil(total / limit),
@@ -1277,7 +1506,9 @@ exports.getInvoiceById = async (req, res) => {
       .populate("createdBy", "name email role")
       .populate("paymentRequest")
       .populate("approvalHistory.approvedBy", "name email role")
-      .populate("rejectionHistory.rejectedBy", "name email role");
+      .populate("rejectionHistory.rejectedBy", "name email role")
+      .populate("paymentPlan.parts.history.by", "name email role")
+      .populate("paymentPlan.parts.requestedBy", "name email role");
 
     if (!invoice) return res.status(404).json({ message: "Invoice not found" });
     const branchScopedRoles = [
@@ -1295,7 +1526,9 @@ exports.getInvoiceById = async (req, res) => {
           .json({ message: "You do not have access to this record" });
       }
     }
-    res.json(withGstSplit(withDerivedCycle(invoice)));
+    const out = withGstSplit(withDerivedCycle(invoice));
+    if (plan.isPartPlan(out)) out.paymentPlanSummary = plan.planSummary(out);
+    res.json(out);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }

@@ -17,6 +17,10 @@ import {
   usePaymentCycle,
   ApprovalCycleNotice,
 } from "../components/PaymentCycleWidgets.jsx";
+import {
+  PartPaymentsPanel,
+  PartPaymentBadge,
+} from "../components/PaymentPlanWidgets.jsx";
 
 const STATUS_STYLES = {
   Draft: { bg: "#f1f5f9", color: "#475569", icon: "📝" },
@@ -213,6 +217,7 @@ export default function InvoiceDetail() {
               >
                 {ss.icon} {invoice.status}
               </span>
+              <PartPaymentBadge summary={invoice.paymentPlanSummary} />
             </div>
             <div style={S.meta}>
               Created by <strong>{invoice.createdBy?.name}</strong> ·{" "}
@@ -481,6 +486,14 @@ export default function InvoiceDetail() {
 
         <div style={S.tabContent}>
           {/* Details */}
+          {/* Nov 2026 — part payments: parts, approvals and actions */}
+          {activeTab === "details" && (
+            <PartPaymentsPanel
+              invoice={invoice}
+              user={user}
+              onChanged={fetchInvoice}
+            />
+          )}
           {activeTab === "details" && (
             <div style={S.grid2}>
               <InfoCard title="Invoice Information">
@@ -1006,16 +1019,28 @@ export default function InvoiceDetail() {
                   {tdsInput !== "" &&
                     (() => {
                       // Match the backend exactly: TDS rounded to nearest rupee
-                      const tdsAmount = Math.round(
-                        (invoice.amount * (parseFloat(tdsInput) || 0)) / 100,
-                      );
-                      const netPayable =
+                      const grossPayable =
                         invoice.amount +
                         (invoice.gstAmount || 0) +
                         (invoice.roundOff || 0) -
                         (Number(invoice.specialDiscount) || 0) -
-                        (Number(invoice.cashDiscount) || 0) -
-                        tdsAmount;
+                        (Number(invoice.cashDiscount) || 0);
+                      // Nov 2026 — part payment: TDS on part 1's share only
+                      const part1 = invoice.paymentPlanSummary?.plan
+                        ? invoice.paymentPlanSummary.parts?.[0]
+                        : null;
+                      const taxable = part1
+                        ? Math.round(
+                            ((invoice.amount * (part1.amount || 0)) /
+                              (grossPayable || 1)) *
+                              100,
+                          ) / 100
+                        : invoice.amount;
+                      const tdsAmount = Math.round(
+                        (taxable * (parseFloat(tdsInput) || 0)) / 100,
+                      );
+                      const netPayable =
+                        (part1 ? part1.amount : grossPayable) - tdsAmount;
                       return (
                         <div
                           style={{
@@ -1028,11 +1053,18 @@ export default function InvoiceDetail() {
                             color: "#16a34a",
                           }}
                         >
+                          {part1 && (
+                            <div style={{ fontWeight: 700, marginBottom: 2 }}>
+                              Part payment — TDS on Part 1 (₹
+                              {part1.amount.toLocaleString("en-IN")}) only;
+                              later parts get their own TDS.
+                            </div>
+                          )}
                           TDS Amount: ₹
                           {tdsAmount.toLocaleString("en-IN", {
                             minimumFractionDigits: 2,
                           })}{" "}
-                          · Net Payable: ₹
+                          · {part1 ? "Part 1 Payable" : "Net Payable"}: ₹
                           {netPayable.toLocaleString("en-IN", {
                             minimumFractionDigits: 2,
                           })}

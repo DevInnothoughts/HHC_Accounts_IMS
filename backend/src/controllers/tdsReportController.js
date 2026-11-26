@@ -103,9 +103,19 @@ const pipeline = (f) => {
   };
   if (f.branchIds) match.branch = { $in: f.branchIds };
   if (f.category) match.expenseCategory = f.category;
-  if (f.rate !== null) match.tdsPercentage = f.rate;
-  if (f.tds === "with") match.tdsAmount = { $gt: 0 };
-  if (f.tds === "nil") match.$or = [{ tdsAmount: 0 }, { tdsAmount: null }];
+  // Rate / with-nil filters apply per invoice — except part-payment
+  // invoices (Nov 2026), whose TDS is per part: those pass here and are
+  // filtered line by line in expandPartLines.
+  const perInvoice = [];
+  if (f.rate !== null) perInvoice.push({ tdsPercentage: f.rate });
+  if (f.tds === "with") perInvoice.push({ tdsAmount: { $gt: 0 } });
+  if (f.tds === "nil")
+    perInvoice.push({ $or: [{ tdsAmount: 0 }, { tdsAmount: null }] });
+  if (perInvoice.length)
+    match.$or = [
+      { "paymentPlan.mode": "partial" },
+      perInvoice.length === 1 ? perInvoice[0] : { $and: perInvoice },
+    ];
   const range = {};
   if (f.from) range.$gte = f.from;
   if (f.to) range.$lte = f.to;
@@ -147,7 +157,11 @@ const pipeline = (f) => {
     },
   ];
   if (hasRange && f.dateBasis === "tdsDate")
-    stages.push({ $match: { _tdsDate: range } });
+    stages.push({
+      $match: {
+        $or: [{ "paymentPlan.mode": "partial" }, { _tdsDate: range }],
+      },
+    });
 
   stages.push(
     { $limit: MAX_SCAN + 1 },
@@ -249,6 +263,10 @@ const pipeline = (f) => {
         paid: NUM("$_p.paidAmount"),
         lastUtr: { $ifNull: ["$_p.utrNumber", null] },
         lastPaidOn: { $ifNull: ["$_p.paymentDate", "$_p.utrRecordedAt"] },
+        // Part payments (Nov 2026)
+        plan: "$paymentPlan",
+        specialDiscount: NUM("$specialDiscount"),
+        cashDiscount: NUM("$cashDiscount"),
       },
     },
   );
@@ -329,14 +347,77 @@ const finish = (o) => ({
       : 0,
 });
 
+// ── Part payments (Nov 2026) ───────────────────────────────
+// A part-payment invoice has TDS per part (Accounts applies it as each part
+// is approved), so it becomes one line per part that carries TDS. Part
+// lines take the part's taxable share, rate, TDS and net; GST is shown
+// pro rata; payments are allocated to parts in order. Other invoices pass
+// through unchanged. Filters the pipeline could not apply per part are
+// applied here.
+const PART_TDS_STATUSES = ["Accounts Approved", "Approved"];
+const expandPartLines = (rows, f) => {
+  const out = [];
+  for (const row of rows) {
+    const { plan, specialDiscount, cashDiscount, ...l } = row;
+    if (plan?.mode !== "partial") {
+      out.push(l);
+      continue;
+    }
+    const gross = r2(
+      l.taxable + l.gst + l.roundOff - specialDiscount - cashDiscount,
+    );
+    let paidLeft = l.paid;
+    const parts = [...(plan.parts || [])].sort((a, b) => a.partNo - b.partNo);
+    for (const p of parts) {
+      const counts =
+        f.stage === "final"
+          ? p.status === "Approved"
+          : PART_TDS_STATUSES.includes(p.status);
+      if (!counts) continue;
+      const net = r2(p.netAmount);
+      const paid = r2(Math.max(0, Math.min(net, paidLeft)));
+      paidLeft = r2(paidLeft - paid);
+      const line = {
+        ...l,
+        _id: `${l._id}-P${p.partNo}`,
+        invoiceId: l._id,
+        partNo: p.partNo,
+        requestId: `${l.requestId} · Part ${p.partNo}`,
+        tdsDate: p.tdsAppliedAt || null,
+        taxable: r2(p.taxableAmount),
+        gst: gross > 0 ? r2((l.gst * (Number(p.amount) || 0)) / gross) : 0,
+        roundOff: 0,
+        tdsPct: p.tdsPercentage ?? null,
+        tds: r2(p.tdsAmount),
+        net,
+        paid,
+      };
+      if (f.rate !== null && Number(line.tdsPct) !== Number(f.rate)) continue;
+      if (f.tds === "with" && !(line.tds > 0)) continue;
+      if (f.tds === "nil" && line.tds > 0) continue;
+      if (f.dateBasis === "tdsDate" && (f.from || f.to)) {
+        const d = line.tdsDate ? new Date(line.tdsDate) : null;
+        if (!d) continue;
+        if (f.from && d < f.from) continue;
+        if (f.to && d > f.to) continue;
+      }
+      out.push(line);
+    }
+  }
+  return out;
+};
+
 exports.getTdsReport = async (req, res) => {
   try {
     const f = parseFilters(req);
-    const rows = await InvoiceRequest.aggregate(pipeline(f)).allowDiskUse(true);
-    if (rows.length > MAX_SCAN)
+    const rawRows = await InvoiceRequest.aggregate(pipeline(f)).allowDiskUse(
+      true,
+    );
+    if (rawRows.length > MAX_SCAN)
       throw new BadRequest(
         `More than ${MAX_SCAN.toLocaleString("en-IN")} invoices match — narrow the period or pick a branch.`,
       );
+    const rows = expandPartLines(rawRows, f); // Nov 2026 — one line per part
 
     const basisDate = (l) =>
       f.dateBasis === "tdsDate" ? l.tdsDate : l.invoiceDate;
@@ -773,11 +854,14 @@ exports.exportTdsWorkingExcel = async (req, res) => {
     f.vendorKey = "";
     f.search = "";
 
-    const rows = await InvoiceRequest.aggregate(pipeline(f)).allowDiskUse(true);
-    if (rows.length > MAX_SCAN)
+    const rawRows = await InvoiceRequest.aggregate(pipeline(f)).allowDiskUse(
+      true,
+    );
+    if (rawRows.length > MAX_SCAN)
       throw new BadRequest(
         `More than ${MAX_SCAN.toLocaleString("en-IN")} invoices match — narrow the period or pick a branch.`,
       );
+    const rows = expandPartLines(rawRows, f); // Nov 2026 — one line per part
 
     const basisDate = (l) =>
       f.dateBasis === "tdsDate" ? l.tdsDate : l.invoiceDate;

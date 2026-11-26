@@ -153,6 +153,18 @@ const DownloadIcon = () => (
   </svg>
 );
 
+// Nov 2026 — part payments. What Accounts may raise now: the remaining
+// balance, capped at the approved parts (net of their TDS) that are
+// is not yet paid. Fully approved invoices give the whole remaining balance.
+const raisableOf = (inv) => {
+  const pay = inv?.paymentRequest;
+  const remaining = pay?.remainingAmount ?? inv?.netPayable ?? 0;
+  const appr = inv?.paymentPlanSummary;
+  return appr
+    ? Math.max(0, Math.min(remaining, appr.availableToRaise ?? remaining))
+    : remaining;
+};
+
 export default function PaymentProcessing() {
   const { user } = useNavigate();
   const navigate = useNavigate();
@@ -413,7 +425,7 @@ export default function PaymentProcessing() {
     try {
       await api.post(`/payments/raise/${raiseModal._id}`, {
         ...raiseForm,
-        paymentAmount: raiseForm.paymentAmount || raiseModal.netPayable,
+        paymentAmount: raiseForm.paymentAmount || raisableOf(raiseModal),
       });
       setRaiseModal(null);
       setRaiseForm({
@@ -1000,7 +1012,14 @@ export default function PaymentProcessing() {
                         // Highlight only — no longer blocks raising.
                         const isOutOfCycle =
                           isRaiseableStatus && !!inv.cycleFlag?.outOfCycle;
-                        const canRaise = isAccounts && isRaiseableStatus;
+                        // Nov 2026 — part payment: approved parts paid, the
+                        // rest waits for the next part to be requested/approved
+                        const appr = inv.paymentPlanSummary;
+                        const awaitingCH =
+                          isRaiseableStatus && !!appr?.awaitingApproval;
+                        const raisable = raisableOf(inv);
+                        const canRaise =
+                          isAccounts && isRaiseableStatus && !awaitingCH;
                         const cycleTag = inv.paymentCycle?.assigned?.cycleLabel;
                         const isFullyPaid = pay?.status === "Fully Paid";
                         const hasActivePayment = [
@@ -1090,6 +1109,40 @@ export default function PaymentProcessing() {
                               }}
                             >
                               ₹{inv.netPayable?.toLocaleString("en-IN")}
+                              {/* Nov 2026 — part payment: approved so far */}
+                              {appr?.plan && (
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    fontWeight: 600,
+                                    color: appr.balancePending
+                                      ? "#b45309"
+                                      : "#16a34a",
+                                    marginTop: 2,
+                                    cursor: "help",
+                                  }}
+                                  title={
+                                    appr.balancePending
+                                      ? `Part-payment invoice: approved parts come to ₹${appr.approvedAmount.toLocaleString("en-IN")} after TDS. The rest is paid as further parts once the branch requests them and they are approved.`
+                                      : "Part-payment invoice — every part approved"
+                                  }
+                                >
+                                  ⚡ Parts approved ₹
+                                  {appr.approvedAmount.toLocaleString("en-IN")}
+                                  {appr.activePart &&
+                                    appr.activePart.partNo > 1 && (
+                                      <div
+                                        style={{
+                                          fontWeight: 500,
+                                          color: "#2563eb",
+                                        }}
+                                      >
+                                        Part {appr.activePart.partNo} in
+                                        approval
+                                      </div>
+                                    )}
+                                </div>
+                              )}
                               {/* Nov 2026 — discount reference (only when present) */}
                               {(Number(inv.specialDiscount) || 0) +
                                 (Number(inv.cashDiscount) || 0) >
@@ -1192,6 +1245,22 @@ export default function PaymentProcessing() {
                                 >
                                   🎉 Fully Paid
                                 </span>
+                              ) : awaitingCH ? (
+                                <span
+                                  style={{
+                                    display: "inline-block",
+                                    fontSize: 11.5,
+                                    fontWeight: 600,
+                                    color: "#b45309",
+                                    background: "#fffbeb",
+                                    border: "1px solid #fde68a",
+                                    borderRadius: 8,
+                                    padding: "5px 9px",
+                                  }}
+                                  title="Every approved part is paid. The rest of this invoice comes as a further part, once the branch requests it and it is approved."
+                                >
+                                  ⏳ Awaiting next part
+                                </span>
                               ) : canRaise ? (
                                 <>
                                   <button
@@ -1206,7 +1275,7 @@ export default function PaymentProcessing() {
                                       setRaiseForm({
                                         paymentRemarks: "",
                                         scheduledDate: "",
-                                        paymentAmount: remaining,
+                                        paymentAmount: raisable,
                                         paymentType: "full",
                                       });
                                     }}
@@ -1967,6 +2036,44 @@ export default function PaymentProcessing() {
                     )?.toLocaleString("en-IN")}
                   </strong>
                 </div>
+                {/* Nov 2026 — part payment */}
+                {raiseModal.paymentPlanSummary?.plan && (
+                  <>
+                    <div style={S.summaryRow}>
+                      <span>Approved parts (after TDS)</span>
+                      <strong style={{ color: "#16a34a" }}>
+                        ₹
+                        {raiseModal.paymentPlanSummary.approvedAmount.toLocaleString(
+                          "en-IN",
+                        )}
+                      </strong>
+                    </div>
+                    {raiseModal.paymentPlanSummary.balancePending && (
+                      <div style={S.summaryRow}>
+                        <span>Not yet approved (later parts)</span>
+                        <strong style={{ color: "#b45309" }}>
+                          ₹
+                          {raiseModal.paymentPlanSummary.pendingApproval.toLocaleString(
+                            "en-IN",
+                          )}
+                        </strong>
+                      </div>
+                    )}
+                    <div
+                      style={{
+                        ...S.summaryRow,
+                        borderTop: "2px solid #e2e8f0",
+                        paddingTop: 8,
+                        marginTop: 4,
+                      }}
+                    >
+                      <span style={{ fontWeight: 700 }}>You can raise now</span>
+                      <strong style={{ color: "#16a34a", fontSize: 16 }}>
+                        ₹{raisableOf(raiseModal).toLocaleString("en-IN")}
+                      </strong>
+                    </div>
+                  </>
+                )}
               </div>
 
               {/* Payment Type */}
@@ -2005,9 +2112,7 @@ export default function PaymentProcessing() {
                         value={type}
                         checked={raiseForm.paymentType === type}
                         onChange={(e) => {
-                          const remaining =
-                            raiseModal.paymentRequest?.remainingAmount ??
-                            raiseModal.netPayable;
+                          const remaining = raisableOf(raiseModal);
                           setRaiseForm((f) => ({
                             ...f,
                             paymentType: e.target.value,
@@ -2018,7 +2123,9 @@ export default function PaymentProcessing() {
                         style={{ display: "none" }}
                       />
                       {type === "full"
-                        ? "💯 Full Payment"
+                        ? raiseModal.paymentPlanSummary?.balancePending
+                          ? "💯 Full Approved Amount"
+                          : "💯 Full Payment"
                         : "⚡ Partial Payment"}
                     </label>
                   ))}
@@ -2049,10 +2156,7 @@ export default function PaymentProcessing() {
                   <input
                     type="number"
                     min="1"
-                    max={
-                      raiseModal.paymentRequest?.remainingAmount ??
-                      raiseModal.netPayable
-                    }
+                    max={raisableOf(raiseModal)}
                     step="0.01"
                     style={{
                       width: "100%",
@@ -2086,11 +2190,7 @@ export default function PaymentProcessing() {
                   <span
                     style={{ fontSize: 11, color: "#94a3b8", marginTop: 2 }}
                   >
-                    Max: ₹
-                    {(
-                      raiseModal.paymentRequest?.remainingAmount ??
-                      raiseModal.netPayable
-                    )?.toLocaleString("en-IN")}
+                    Max: ₹{raisableOf(raiseModal).toLocaleString("en-IN")}
                   </span>
                 )}
               </div>
@@ -2908,6 +3008,9 @@ const S = {
     zIndex: 200,
     padding: 20,
   },
+  // NOTE: this later `modal` overrides the one defined earlier in S (a
+  // duplicate key — the last one wins), so the scroll settings must live
+  // here. Used by the Raise Payment, bulk bank-file and UTR popups.
   modal: {
     background: "#fff",
     borderRadius: 14,
@@ -2915,6 +3018,9 @@ const S = {
     width: "100%",
     maxWidth: 560,
     boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+    maxHeight: "90vh", // never taller than the screen…
+    overflowY: "auto", // …scroll the rest
+    overscrollBehavior: "contain", // don't scroll the page behind
   },
   modalTitle: {
     fontSize: 18,
@@ -2922,7 +3028,19 @@ const S = {
     color: C.primary,
     marginBottom: 8,
   },
-  modalBtns: { display: "flex", gap: 10 },
+  // Buttons stay pinned to the bottom of a scrolling popup, so Confirm is
+  // always reachable. (Overrides the earlier duplicate `modalBtns`.)
+  modalBtns: {
+    display: "flex",
+    gap: 10,
+    position: "sticky",
+    bottom: -28, // sit flush with the modal's 28px bottom padding
+    background: "#fff",
+    padding: "12px 0 28px",
+    marginBottom: -28,
+    borderTop: "1px solid #f1f5f9",
+    zIndex: 1,
+  },
   cancelBtn: {
     flex: 1,
     padding: "10px",

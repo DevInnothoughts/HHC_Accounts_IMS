@@ -21,15 +21,16 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 // Payment states in which money is in motion for this invoice. A credit
 // note is not allowed (or approved) while one exists: the bank file amount
 // must not change underneath it.
-const IN_PROGRESS = ["Payment Raised", "Accounts Approved", "Excel Generated"];
-const ACTIVE_INSTALLMENT = ["Raised", "Approved", "Excel Generated"];
-
-const paymentInProgress = (payment) =>
-  !!payment &&
-  (IN_PROGRESS.includes(payment.status) ||
-    (payment.installments || []).some((i) =>
-      ACTIVE_INSTALLMENT.includes(i.status),
-    ));
+//
+// Nov 2026: decided by the PARENT status only. Installments are created
+// "Raised" and only ever moved to "Processed" by a UTR — a rejected one
+// used to stay "Raised" for good, which blocked credit notes on that
+// invoice permanently. Shared with raisePayment (utils/paymentPlan).
+const {
+  paymentInProgress,
+  isPartPlan,
+  requestedOf,
+} = require("../utils/paymentPlan");
 
 // The invoice's ORIGINAL lines. Older invoices may have no items; they are
 // treated as one line worth the original base amount.
@@ -151,8 +152,13 @@ const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
     invoice.tdsPercentage !== null && invoice.tdsPercentage !== undefined
       ? Number(invoice.tdsPercentage)
       : null;
-  const newTds =
-    tdsPct !== null
+  // Part payments (Nov 2026): TDS is deducted part by part, on the parts
+  // Accounts has approved — the TDS already deducted stays as it is. The
+  // credit note can only come out of the balance not yet requested.
+  const partPlan = isPartPlan(invoice);
+  const newTds = partPlan
+    ? curTds
+    : tdsPct !== null
       ? Math.round((newBase * tdsPct) / 100)
       : curBase > 0
         ? Math.round((curTds * newBase) / curBase)
@@ -171,6 +177,21 @@ const computeCreditNote = async (invoice, requested, { excludeId } = {}) => {
   const newNet = round2(
     Math.max(0, newBase + newGst + newRoundOff - discounts - newTds),
   );
+  if (partPlan) {
+    const newGross = round2(newBase + newGst + newRoundOff - discounts);
+    const requested = requestedOf(invoice);
+    if (newGross < requested - 0.009) {
+      const room = round2(
+        Math.max(
+          0,
+          round2(curBase + curGst + curRoundOff - discounts) - requested,
+        ),
+      );
+      return fail(
+        `This is a part-payment invoice: ₹${requested.toLocaleString("en-IN")} has already been requested in parts, so a credit note can reduce only the balance not yet requested (₹${room.toLocaleString("en-IN")}).`,
+      );
+    }
+  }
   const curNet = round2(invoice.netPayable);
 
   return {

@@ -13,6 +13,10 @@ import {
   usePaymentCycle,
   PaymentCycleModal,
 } from "../components/PaymentCycleWidgets.jsx";
+import {
+  PaymentModeField,
+  partAmountError,
+} from "../components/PaymentPlanWidgets.jsx";
 
 const EXPENSE_TYPES = ["Revenue", "Capital"];
 
@@ -50,6 +54,9 @@ const INIT = {
   specialDiscount: "0", // ✅ Nov 2026 — deducted from invoice total, default 0
   cashDiscount: "0", // ✅ Nov 2026 — deducted from invoice total, default 0
   netPayable: "",
+  // ✅ Nov 2026 — Full / Partial payment (branch user's choice)
+  paymentMode: "full",
+  partialAmount: "",
   invoiceNumber: "",
   invoiceDate: "",
   dueDate: "",
@@ -205,6 +212,15 @@ export default function CreatePaymentRequest() {
       if (num(form.specialDiscount) + num(form.cashDiscount) > invoiceTotal)
         e.discount =
           "Total discount cannot exceed the invoice total (Base + GST ± Round Off)";
+      // ✅ Part payment: part 1 must be less than the payable amount
+      if (form.paymentMode === "partial") {
+        const pe = partAmountError(
+          form.partialAmount,
+          num(form.netPayable),
+          true,
+        );
+        if (pe) e.partialAmount = pe;
+      }
     }
     if (s === 2) {
       if (!form.invoiceNumber?.trim())
@@ -635,6 +651,16 @@ export default function CreatePaymentRequest() {
                   </div>
                 </div>
               </div>
+
+              {/* ✅ Nov 2026 — Full / Partial payment */}
+              <PaymentModeField
+                grossPayable={num(form.netPayable)}
+                mode={form.paymentMode}
+                amount={form.partialAmount}
+                onMode={(m) => setField("paymentMode", m)}
+                onAmount={(v) => setField("partialAmount", v)}
+                error={errors.partialAmount}
+              />
             </div>
           )}
 
@@ -808,6 +834,14 @@ export default function CreatePaymentRequest() {
                   </div>
                 </ReviewSection>
                 <ReviewSection title="Invoice Details">
+                  <ReviewRow
+                    label="Payment"
+                    value={
+                      form.paymentMode === "partial"
+                        ? `Partial — Part 1: ₹${num(form.partialAmount).toLocaleString("en-IN", { minimumFractionDigits: 2 })} now, balance later`
+                        : "Full"
+                    }
+                  />
                   <ReviewRow label="Invoice No." value={form.invoiceNumber} />
                   <ReviewRow label="Invoice Date" value={form.invoiceDate} />
                   <ReviewRow label="Due Date" value={form.dueDate || "—"} />

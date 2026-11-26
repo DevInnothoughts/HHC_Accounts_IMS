@@ -28,6 +28,7 @@ const {
   TALLY_COLUMNS,
   buildInvoiceVoucher,
   buildDebitNoteVoucher,
+  buildPartTdsVoucher,
   accountsApprovalDate,
   toRows,
   fmtDate,
@@ -97,17 +98,58 @@ const collect = async ({ branch, start, end, includeExported }) => {
     .populate("vendor", "vendorName")
     .lean();
 
+  // Part payments (Nov 2026): TDS on later parts, one journal per part,
+  // dated the day Accounts approved the part.
+  const partElem = {
+    partNo: { $gt: 1 },
+    status: { $in: ["Accounts Approved", "Approved"] },
+    tdsAmount: { $gt: 0 },
+    tdsAppliedAt: { $gte: start, $lte: end },
+  };
+  if (!includeExported) partElem["tallyExport.exportedAt"] = { $exists: false };
+  const partInvoices = await InvoiceRequest.find({
+    branch,
+    status: INVOICE_STATUS.CLUSTER_APPROVED,
+    "paymentPlan.mode": "partial",
+    "paymentPlan.parts": { $elemMatch: partElem },
+  })
+    .populate("vendor", "vendorName")
+    .populate("expenseCategory", "name code type")
+    .lean();
+  const partVouchers = [];
+  for (const inv of partInvoices) {
+    for (const part of inv.paymentPlan.parts || []) {
+      if (
+        part.partNo > 1 &&
+        ["Accounts Approved", "Approved"].includes(part.status) &&
+        part.tdsAmount > 0 &&
+        inPeriod(part.tdsAppliedAt, start, end) &&
+        (includeExported || !part.tallyExport?.exportedAt)
+      )
+        partVouchers.push(buildPartTdsVoucher(inv, part));
+    }
+  }
+
   const vouchers = [
     ...invoices
       .filter((inv) => inPeriod(accountsApprovalDate(inv) || null, start, end))
       .map(buildInvoiceVoucher),
+    ...partVouchers,
     ...notes.map(buildDebitNoteVoucher),
   ];
   // Date order, invoices before debit notes on the same day
   vouchers.sort(
     (a, b) =>
       new Date(a.voucherDate) - new Date(b.voucherDate) ||
-      (a.kind === b.kind ? 0 : a.kind === "invoice" ? -1 : 1) ||
+      (a.kind === b.kind
+        ? 0
+        : a.kind === "invoice"
+          ? -1
+          : b.kind === "invoice"
+            ? 1
+            : a.kind === "invoice_part"
+              ? -1
+              : 1) ||
       String(a.voucherNumber).localeCompare(String(b.voucherNumber)),
   );
   return vouchers;
@@ -116,6 +158,7 @@ const collect = async ({ branch, start, end, includeExported }) => {
 const summarise = (vouchers) => ({
   vouchers: vouchers.length,
   journal: vouchers.filter((v) => v.voucherType === "Journal").length,
+  partTds: vouchers.filter((v) => v.kind === "invoice_part").length,
   purchase: vouchers.filter((v) => v.voucherType === "Purchase").length,
   debitNote: vouchers.filter((v) => v.voucherType === "Debit Note").length,
   withWarnings: vouchers.filter((v) => v.warnings.length).length,
@@ -238,6 +281,28 @@ exports.exportExcel = async (req, res) => {
       .map((v) => new mongoose.Types.ObjectId(v.sourceId));
     if (invIds.length) await InvoiceRequest.updateMany(...stamp(invIds));
     if (cnIds.length) await CreditNote.updateMany(...stamp(cnIds));
+    // Part TDS journals (Nov 2026): stamp the part inside the invoice
+    const partsByInvoice = {};
+    for (const v of vouchers.filter((x) => x.kind === "invoice_part"))
+      (partsByInvoice[v.invoiceId] = partsByInvoice[v.invoiceId] || []).push(
+        v.partNo,
+      );
+    const partOps = Object.entries(partsByInvoice).map(([id, nums]) => ({
+      updateOne: {
+        filter: { _id: new mongoose.Types.ObjectId(id) },
+        update: {
+          $set: {
+            "paymentPlan.parts.$[p].tallyExport": {
+              exportedAt: new Date(),
+              exportedBy: req.user._id,
+              batchId,
+            },
+          },
+        },
+        arrayFilters: [{ "p.partNo": { $in: nums } }],
+      },
+    }));
+    if (partOps.length) await InvoiceRequest.bulkWrite(partOps);
 
     const s = summarise(vouchers);
     await logAction({

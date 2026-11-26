@@ -114,6 +114,27 @@ router.patch(
   ctrl.rejectInvoice,
 );
 
+// ── Part payments (Nov 2026) — later parts of a part-payment invoice ──
+// Part 1 is approved with the invoice above. The person who raised the
+// invoice requests each next part; it then runs Partner → Accounts (TDS on
+// the part) → Cluster Head. See controllers/invoicePartController.js.
+const partCtrl = require("../controllers/invoicePartController");
+router.post(
+  "/:id/parts",
+  roleGuard(ROLES.BRANCH_USER, ROLES.ACCOUNTS),
+  partCtrl.requestPart,
+);
+router.patch(
+  "/:id/parts/:partNo/approve",
+  roleGuard(ROLES.ACCOUNTS, ROLES.BRANCH_PARTNER, ROLES.CLUSTER_HEAD),
+  partCtrl.approvePart,
+);
+router.patch(
+  "/:id/parts/:partNo/reject",
+  roleGuard(ROLES.ACCOUNTS, ROLES.BRANCH_PARTNER, ROLES.CLUSTER_HEAD),
+  partCtrl.rejectPart,
+);
+
 router.post("/check-duplicate", async (req, res) => {
   try {
     const { branchId, vendorId, invoiceNumber, amount, excludeId } = req.body;

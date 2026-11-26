@@ -60,6 +60,84 @@ const paymentCycleSnapshotSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// ── Part payments — Nov 2026 ───────────────────────────────
+// The branch user may ask, when adding the invoice, to pay only part of it
+// now. Each part runs through the same approval chain as an invoice
+// (Partner → Accounts with TDS on that part → Cluster Head). Part 1 is the
+// invoice's own approval; later parts are requested by the branch user
+// from the "Part Payments" list. See services/paymentPlanService.js.
+const partHistorySchema = new mongoose.Schema(
+  {
+    stage: String,
+    by: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    action: { type: String, enum: ["requested", "approved", "rejected"] },
+    remarks: String,
+    at: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
+const paymentPartSchema = new mongoose.Schema(
+  {
+    partNo: { type: Number, required: true, min: 1 },
+    // Share of the payable (base + GST ± round off − discounts) this part
+    // releases, BEFORE TDS. Entered by the branch user.
+    amount: { type: Number, required: true, min: 0 },
+    status: {
+      type: String,
+      enum: [
+        "Draft",
+        "Submitted",
+        "Partner Approved",
+        "Accounts Approved",
+        "Approved",
+        "Rejected",
+      ],
+      default: "Draft",
+    },
+    partnerSkipped: { type: Boolean, default: undefined },
+    remarks: { type: String, trim: true },
+    requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    requestedAt: { type: Date },
+    // Set by Accounts on this part only
+    taxableAmount: { type: Number, default: undefined }, // base share TDS is on
+    tdsPercentage: { type: Number, default: undefined },
+    tdsAmount: { type: Number, default: undefined },
+    netAmount: { type: Number, default: undefined }, // amount − tdsAmount
+    tdsAppliedAt: { type: Date, default: undefined },
+    // Set at Cluster Head approval
+    approvedAt: { type: Date, default: undefined },
+    paymentCycle: { type: paymentCycleSnapshotSchema, default: undefined },
+    history: { type: [partHistorySchema], default: undefined },
+    // Tally: parts after the first go out as their own TDS journal
+    tallyExport: {
+      type: new mongoose.Schema(
+        {
+          exportedAt: Date,
+          exportedBy: mongoose.Schema.Types.ObjectId,
+          batchId: String,
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
+  },
+  { _id: false },
+);
+
+const paymentPlanSchema = new mongoose.Schema(
+  {
+    mode: { type: String, enum: ["partial"] },
+    parts: { type: [paymentPartSchema], default: undefined },
+    // The later part (2+) currently in approval — kept for the approvers'
+    // queue query. Absent when no later part is in approval.
+    activePartNo: { type: Number, default: undefined },
+    activeStatus: { type: String, default: undefined },
+    activePartnerSkipped: { type: Boolean, default: undefined },
+  },
+  { _id: false },
+);
+
 const invoiceRequestSchema = new mongoose.Schema(
   {
     requestId: { type: String, unique: true },
@@ -170,6 +248,13 @@ const invoiceRequestSchema = new mongoose.Schema(
       },
       default: undefined,
     },
+    // ── Part payments — Nov 2026 ───────────────────────────
+    // Optional. Absent = the whole invoice is paid in one go (every
+    // existing invoice, fixed payments). When present, tdsAmount and
+    // netPayable hold the TDS deducted on the parts approved by Accounts so
+    // far, and Accounts may raise only what the Cluster Head has approved.
+    paymentPlan: { type: paymentPlanSchema, default: undefined },
+
     creditNoteTotal: { type: Number, default: undefined }, // sum of net reductions
     creditNoteRefundDue: { type: Number, default: undefined }, // vendor to refund outside PMS
 

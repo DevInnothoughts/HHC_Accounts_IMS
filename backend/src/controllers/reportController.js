@@ -15,6 +15,7 @@ const Vendor = require("../models/Vendor");
 const VendorMaster = require("../models/VendorMaster");
 const CreditNote = require("../models/CreditNote");
 const FixedPayment = require("../models/FixedPayment");
+const { awaitingRoleFilter } = require("../utils/paymentPlan");
 const { vendorIdentityStages } = require("../utils/vendorIdentity");
 
 // Masters that are not approved yet. A branch vendor waiting on one of
@@ -261,29 +262,49 @@ async function getPendingActionsForRole(role, user) {
   // AFTER
   if (role === "accounts") {
     const waitingOnMaster = await unapprovedMasterIds();
-    const [invoiceApprove, paymentApprove, vendorApprove, masterApprove] =
-      await Promise.all([
-        InvoiceRequest.countDocuments({
-          ...branchFilter,
-          status: "Partner Approved",
-        }),
-        PaymentProcessing.countDocuments({
-          ...branchFilter,
-          status: "Payment Raised",
-        }),
-        Vendor.countDocuments({
-          ...branchFilter,
-          approvalStatus: "pending_approval",
-          vendorMaster: { $nin: waitingOnMaster },
-        }),
-        VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
-      ]);
+    const [
+      invoiceApprove,
+      paymentApprove,
+      vendorApprove,
+      masterApprove,
+      readyToPay,
+    ] = await Promise.all([
+      InvoiceRequest.countDocuments({
+        ...branchFilter,
+        status: "Partner Approved",
+      }),
+      PaymentProcessing.countDocuments({
+        ...branchFilter,
+        status: "Payment Raised",
+      }),
+      Vendor.countDocuments({
+        ...branchFilter,
+        approvalStatus: "pending_approval",
+        vendorMaster: { $nin: waitingOnMaster },
+      }),
+      VendorMaster.countDocuments({ approvalStatus: "pending_approval" }),
+      // Nov 2026 — moved here from branch_user: raising a payment is
+      // Accounts' job. Same statuses Payment Processing lets you raise from.
+      PaymentProcessing.countDocuments({
+        ...branchFilter,
+        status: {
+          $in: ["Payment Pending", "Partially Paid", "Payment Rejected"],
+        },
+      }),
+    ]);
     if (invoiceApprove > 0)
       actions.push({
         label: "Invoices awaiting your approval",
         count: invoiceApprove,
         path: "/invoices",
         color: "#2563eb",
+      });
+    if (readyToPay > 0)
+      actions.push({
+        label: "Approved invoices ready to pay",
+        count: readyToPay,
+        path: "/payments",
+        color: "#16a34a",
       });
     if (paymentApprove > 0)
       actions.push({
@@ -369,16 +390,19 @@ async function getPendingActionsForRole(role, user) {
   }
 
   if (role === "branch_user") {
-    const [drafts, rejected, paymentPending] = await Promise.all([
+    // Nov 2026 — "Approved invoices ready to pay" moved to Accounts (only
+    // Accounts can raise a payment). Rejected counts only the user's own
+    // invoices: only the person who raised an invoice can revise it.
+    const [drafts, rejected] = await Promise.all([
       InvoiceRequest.countDocuments({
         ...branchFilter,
         status: "Draft",
         createdBy: user._id,
       }),
-      InvoiceRequest.countDocuments({ ...branchFilter, status: "Rejected" }),
-      PaymentProcessing.countDocuments({
+      InvoiceRequest.countDocuments({
         ...branchFilter,
-        status: "Payment Pending",
+        status: "Rejected",
+        createdBy: user._id,
       }),
     ]);
     if (drafts > 0)
@@ -395,12 +419,23 @@ async function getPendingActionsForRole(role, user) {
         path: "/invoices",
         color: "#dc2626",
       });
-    if (paymentPending > 0)
+  }
+
+  // Nov 2026 — later parts of part-payment invoices waiting for this role
+  const partFilter = awaitingRoleFilter(role);
+  if (partFilter) {
+    const parts = await InvoiceRequest.countDocuments({
+      ...branchFilter,
+      status: "Cluster Head Approved",
+      "paymentPlan.mode": "partial",
+      ...partFilter,
+    });
+    if (parts > 0)
       actions.push({
-        label: "Approved invoices ready to pay",
-        count: paymentPending,
-        path: "/payments",
-        color: "#16a34a",
+        label: "Part payments awaiting your approval",
+        count: parts,
+        path: "/invoices?partAwaitingMe=true",
+        color: "#0198A3",
       });
   }
 

@@ -38,6 +38,14 @@ const {
   getCycleFlag,
   publicWindow,
 } = require("../utils/paymentCycle");
+const {
+  round2,
+  PAYMENT_CLOSED_STATUSES,
+  PAYMENT_IN_PROGRESS_STATUSES,
+  paymentInProgress,
+  planSummary,
+  isPartPlan,
+} = require("../utils/paymentPlan");
 
 // "Payment Remark" cell = invoice remarks + description.
 // Remarks are frequently left blank, so the description keeps the column useful.
@@ -239,6 +247,10 @@ exports.getApprovedInvoicesForPayment = async (req, res) => {
     const invoices = invoiceDocs.map((doc) => {
       const obj = doc.toObject();
       obj.cycleFlag = getCycleFlag(obj, now, window);
+      // Nov 2026 — part payments: what is approved for payment and what
+      // Accounts may raise now. awaitingApproval = approved parts paid,
+      // the balance still has to be requested / approved as a next part.
+      if (isPartPlan(obj)) obj.paymentPlanSummary = planSummary(obj);
       return obj;
     });
 
@@ -362,7 +374,7 @@ exports.getPayments = async (req, res) => {
     const payments = await PaymentProcessing.find(query)
       .populate(
         "invoiceRequest",
-        "requestId invoiceNumber invoiceDate netPayable",
+        "requestId invoiceNumber invoiceDate netPayable amount gstAmount roundOff specialDiscount cashDiscount paymentPlan status",
       )
       .populate("branch", "name code bankAccounts")
       .populate("vendor", "vendorName companyName")
@@ -372,7 +384,13 @@ exports.getPayments = async (req, res) => {
       .limit(perPage);
 
     res.json({
-      payments,
+      payments: payments.map((p) => {
+        const obj = p.toObject();
+        if (isPartPlan(obj.invoiceRequest)) {
+          obj.paymentPlanSummary = planSummary(obj.invoiceRequest, obj);
+        }
+        return obj;
+      }),
       total,
       page: currentPage,
       pages: Math.ceil(total / perPage),
@@ -420,39 +438,57 @@ exports.raisePayment = async (req, res) => {
     if (!payment)
       return res.status(404).json({ message: "Payment record not found" });
 
-    // ✅ Block if fully paid
-    if (payment.status === "Fully Paid") {
+    // ✅ Block if fully paid / nothing left to pay
+    if (PAYMENT_CLOSED_STATUSES.includes(payment.status)) {
       return res.status(400).json({
         message: "Payment is already fully cleared for this invoice",
       });
     }
 
-    // ✅ Block if active installment pending
-    const activeStatuses = [
-      "Payment Raised",
-      "Accounts Approved",
-      "Excel Generated",
-    ];
-    const hasActiveInstallment = payment.installments.some((i) =>
-      activeStatuses.includes(i.status),
-    );
-    if (hasActiveInstallment) {
-      return res.status(400).json({
-        message:
-          "A payment is already in progress. Wait for it to be processed before raising another.",
+    // ✅ Block while a payment is already in progress (Nov 2026 fix).
+    // This used to compare INSTALLMENT statuses against the parent's
+    // names ("Payment Raised", "Accounts Approved"), which installments
+    // never carry — so the check never fired and a second payment could
+    // be raised while the first was still with Accounts or the bank. The
+    // parent status is the reliable signal. The write below repeats the
+    // check atomically, so two simultaneous clicks cannot both succeed.
+    if (paymentInProgress(payment)) {
+      return res.status(409).json({
+        code: "PAYMENT_IN_PROGRESS",
+        message: `A payment is already in progress for this invoice ("${payment.status}"). Wait for it to be processed or rejected before raising another.`,
       });
     }
 
     const totalAmount = payment.totalAmount || invoice.netPayable;
-    const remaining = totalAmount - (payment.paidAmount || 0);
-    const amount = parseFloat(paymentAmount) || remaining;
+    const paid = payment.paidAmount || 0;
+    const remaining = round2(totalAmount - paid);
+
+    // ✅ Part payments (Nov 2026). On a part-payment invoice Accounts may
+    // raise only the approved parts (net of their TDS) not yet paid. Any
+    // other invoice gives the whole remaining balance, as before.
+    const approval = planSummary(invoice, payment);
+    const raisable = round2(Math.min(remaining, approval.availableToRaise));
+    if (raisable <= 0) {
+      return res.status(409).json({
+        code: approval.balancePending
+          ? "AWAITING_PART_APPROVAL"
+          : "NOTHING_TO_RAISE",
+        message: approval.balancePending
+          ? `Every approved part (₹${approval.approvedAmount.toLocaleString("en-IN")}) is already paid. The rest of this invoice is paid as a further part, once the branch requests it and it is approved.`
+          : "Nothing is left to raise on this invoice",
+      });
+    }
+
+    const amount = round2(parseFloat(paymentAmount) || raisable);
 
     if (amount <= 0) {
       return res.status(400).json({ message: "Invalid payment amount" });
     }
-    if (amount > remaining) {
+    if (amount - raisable > 0.009) {
       return res.status(400).json({
-        message: `Amount cannot exceed remaining balance of ₹${remaining.toLocaleString("en-IN")}`,
+        message: approval.plan
+          ? `Amount cannot exceed ₹${raisable.toLocaleString("en-IN")} — the approved parts of this invoice come to ₹${approval.approvedAmount.toLocaleString("en-IN")} after TDS`
+          : `Amount cannot exceed remaining balance of ₹${remaining.toLocaleString("en-IN")}`,
       });
     }
 
@@ -470,17 +506,38 @@ exports.raisePayment = async (req, res) => {
       scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
     };
 
-    payment.paymentType = isPartial ? "partial" : "full";
-    payment.paymentAmount = amount;
-    payment.paymentRemarks = paymentRemarks || "";
-    payment.scheduledDate = scheduledDate ? new Date(scheduledDate) : null;
-    payment.raisedBy = req.user._id;
-    payment.totalAmount = payment.totalAmount || invoice.netPayable; // ✅ ensure required field is set
-    payment.remainingAmount = payment.totalAmount - (payment.paidAmount || 0);
-    payment.installments.push(installment);
-    payment.status = "Payment Raised";
-    payment.currentStage = "accounts";
-    await payment.save();
+    // Atomic claim: only succeeds if the payment is still in the status we
+    // read and has the same number of installments. A concurrent raise
+    // changes both, so the second request matches nothing.
+    const updated = await PaymentProcessing.findOneAndUpdate(
+      {
+        _id: payment._id,
+        status: payment.status,
+        installments: { $size: payment.installments.length },
+      },
+      {
+        $set: {
+          paymentType: isPartial ? "partial" : "full",
+          paymentAmount: amount,
+          paymentRemarks: paymentRemarks || "",
+          scheduledDate: scheduledDate ? new Date(scheduledDate) : null,
+          raisedBy: req.user._id,
+          totalAmount, // ✅ ensure required field is set
+          remainingAmount: remaining,
+          status: "Payment Raised",
+          currentStage: "accounts",
+        },
+        $push: { installments: installment },
+      },
+      { new: true, runValidators: true },
+    );
+    if (!updated) {
+      return res.status(409).json({
+        code: "PAYMENT_IN_PROGRESS",
+        message:
+          "This payment was raised or changed by someone else just now. Refresh and try again.",
+      });
+    }
 
     // Notify accounts
     const accountsUsers = await User.find({
@@ -515,7 +572,7 @@ exports.raisePayment = async (req, res) => {
         : {}),
       req,
     });
-    res.json(payment);
+    res.json(updated);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -594,6 +651,29 @@ exports.rejectPayment = async (req, res) => {
       return res
         .status(403)
         .json({ message: "Only accounts team can reject payments" });
+    }
+
+    // Nov 2026: only a payment that is actually in progress can be
+    // rejected. Before this, a Fully Paid or Partially Paid record could be
+    // flipped to "Payment Rejected" and re-raised.
+    if (!PAYMENT_IN_PROGRESS_STATUSES.includes(payment.status)) {
+      return res.status(400).json({
+        message: `Only a payment in progress can be rejected — this one is "${payment.status}"`,
+      });
+    }
+
+    // Close the installment being rejected, so it is never read as open
+    // again (credit notes, UTR entry). Installments are appended, so the
+    // open one is the last; an already-settled one is left alone.
+    const lastInst = payment.installments?.[payment.installments.length - 1];
+    if (lastInst && lastInst.status !== "Processed" && !lastInst.utrNumber) {
+      lastInst.status = "Rejected";
+      lastInst.rejectionHistory.push({
+        rejectedBy: req.user._id,
+        stage: "Accounts Final Approval",
+        reason: reason.trim(),
+        rejectedAt: new Date(),
+      });
     }
 
     payment.status = "Payment Rejected";
@@ -929,6 +1009,10 @@ exports.getPaymentById = async (req, res) => {
           { path: "branch", select: "name code location" },
           { path: "expenseCategory", select: "name code type" },
           { path: "createdBy", select: "name email role" },
+          {
+            path: "paymentPlan.parts.history.by",
+            select: "name email role",
+          },
         ],
       })
       .populate("raisedBy", "name email role")
@@ -951,7 +1035,11 @@ exports.getPaymentById = async (req, res) => {
           .json({ message: "You do not have access to this record" });
       }
     }
-    res.json(payment);
+    const out = payment.toObject();
+    if (isPartPlan(out.invoiceRequest)) {
+      out.paymentPlanSummary = planSummary(out.invoiceRequest, out);
+    }
+    res.json(out);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
