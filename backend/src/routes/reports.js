@@ -140,4 +140,18 @@ router.get(
   require("../controllers/tdsReportController").getTdsReport,
 );
 
+// ── TDS on doctor payments (Nov 2026) ──────────────────────
+// Doctor Referral / Surgeon payouts — a separate list from the invoice
+// TDS above, with its own preview and its own "TDS WORKING" download.
+router.get(
+  "/doctor-tds/working-excel",
+  roleGuard(...PRIMARY_REPORT_ROLES),
+  require("../controllers/doctorTdsReportController").exportWorkingExcel,
+);
+router.get(
+  "/doctor-tds",
+  roleGuard(...PRIMARY_REPORT_ROLES),
+  require("../controllers/doctorTdsReportController").getReport,
+);
+
 module.exports = router;

@@ -50,6 +50,10 @@ const MODULE_TO_MODEL = {
   SLA: "SLAConfig",
   FixedPayment: "FixedPayment",
   CreditNote: "CreditNote",
+  // ✅ Doctor payouts (Nov 2026)
+  Doctor: "Doctor",
+  DoctorPayout: "DoctorPayoutBatch", // upload / approve / reject a batch
+  DoctorPayment: "DoctorPayment",
 };
 
 // Pull a human reference out of whatever document was acted on.

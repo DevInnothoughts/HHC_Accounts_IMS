@@ -18,6 +18,7 @@ import Sidebar from "../components/Sidebar.jsx";
 import SubtypeReport from "./SubtypeReport.jsx";
 import VendorReport from "./VendorReport.jsx";
 import TdsReport from "./TdsReport.jsx";
+import DoctorTdsReport from "./DoctorTdsReport.jsx"; // Nov 2026
 import { downloadExcel, filterMeta } from "../utils/exportExcel";
 import BranchMultiSelect, {
   branchNamesOf,
@@ -74,10 +75,13 @@ const TABS = [
   ["subtype", "Subtype register"],
   ["vendor", "Vendor analysis"],
   ["tds", "TDS"],
+  // Nov 2026 — TDS on Doctor Referral / Surgeon payments, kept as its own
+  // list with its own preview and downloads (DoctorTdsReport.jsx).
+  ["doctorTds", "TDS — Doctors"],
 ];
 
 // Tabs that carry their own filter bar and load their own data.
-const SELF_CONTAINED = ["subtype", "vendor", "tds"];
+const SELF_CONTAINED = ["subtype", "vendor", "tds", "doctorTds"];
 
 const BLANK = {
   from: "",
@@ -89,7 +93,12 @@ const BLANK = {
 
 export default function PrimaryReports() {
   const navigate = useNavigate();
-  const [tab, setTab] = useState("invoice");
+  // ?tab=doctorTds (or any tab key) opens that tab directly — used by the
+  // Doctor Payments overview.
+  const [tab, setTab] = useState(() => {
+    const wanted = new URLSearchParams(window.location.search).get("tab");
+    return TABS.some(([key]) => key === wanted) ? wanted : "invoice";
+  });
 
   // `draft` is what the inputs show; `filters` is what the request uses.
   // Nothing reloads until Apply copies one into the other — otherwise a
@@ -294,6 +303,11 @@ export default function PrimaryReports() {
           <TdsReport
             branches={options.branches}
             categories={options.categories}
+            filterSlot={filterSlot}
+          />
+        ) : tab === "doctorTds" ? (
+          <DoctorTdsReport
+            branches={options.branches}
             filterSlot={filterSlot}
           />
         ) : tab === "vendor" ? (

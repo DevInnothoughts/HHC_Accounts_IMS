@@ -1128,4 +1128,8 @@ exports._internal = {
   fyOf,
   guessNature,
   periodTitle,
+  // Nov 2026 — reused by the doctor payments TDS working sheet
+  // (doctorTdsReportController), so both sheets share one lookup table.
+  NATURES,
+  excelDate,
 };

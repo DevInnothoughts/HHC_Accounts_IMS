@@ -1,6 +1,9 @@
 // ============================================================
 // FRONTEND: src/App.js — REPLACE WHOLE FILE
 // Vendor Master, Phase 2: 3 imports + 4 /vendor-masters routes.
+// Nov 2026 — Doctor payments: 4 imports + /doctor-hub (the overview the
+// sidebar opens), /doctor-payouts, /doctor-payments, /doctors routes
+// (above Vendor Master).
 // ============================================================
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import React from "react";
@@ -30,6 +33,18 @@ import PrimaryReports from "./pages/PrimaryReports.jsx";
 import FixedPayments from "./pages/FixedPayments.jsx";
 import CreditNotes from "./pages/CreditNotes.jsx";
 import TallyExport from "./pages/TallyExport.jsx"; // Nov 2026
+// Doctor Referral + Surgeon payouts — Nov 2026
+import DoctorPayouts from "./pages/DoctorPayouts.jsx";
+import DoctorPayments from "./pages/DoctorPayments.jsx";
+import Doctors from "./pages/Doctors.jsx";
+import DoctorHub from "./pages/DoctorHub.jsx";
+
+const DOCTOR_PAYOUT_ROLES = [
+  "accounts",
+  "super_admin",
+  "cluster_head",
+  "director",
+];
 
 const ProtectedRoute = ({ children, roles }) => {
   const { user } = useAuth();
@@ -131,6 +146,42 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <PaymentDetail />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Doctor Referral + Surgeon payouts — Nov 2026.
+              Upload + approval, payment processing, and the Doctor Master.
+              The API enforces who may act; these roles may open the screens. */}
+          <Route
+            path="/doctor-hub"
+            element={
+              <ProtectedRoute roles={DOCTOR_PAYOUT_ROLES}>
+                <DoctorHub />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor-payouts"
+            element={
+              <ProtectedRoute roles={DOCTOR_PAYOUT_ROLES}>
+                <DoctorPayouts />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctor-payments"
+            element={
+              <ProtectedRoute roles={DOCTOR_PAYOUT_ROLES}>
+                <DoctorPayments />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/doctors"
+            element={
+              <ProtectedRoute roles={DOCTOR_PAYOUT_ROLES}>
+                <Doctors />
               </ProtectedRoute>
             }
           />

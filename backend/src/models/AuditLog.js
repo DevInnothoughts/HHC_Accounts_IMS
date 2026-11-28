@@ -53,6 +53,12 @@ const auditLogSchema = new mongoose.Schema(
         "SLAConfig",
         "FixedPayment",
         "CreditNote",
+        // ✅ Doctor payouts (Nov 2026) — same reason as VendorMaster above:
+        // without these, audit writes for the module fail enum validation
+        // and logAction swallows the error.
+        "Doctor",
+        "DoctorPayoutBatch",
+        "DoctorPayment",
       ],
     },
     // Human reference captured at write time — "INV-000444", "PAY-0231".

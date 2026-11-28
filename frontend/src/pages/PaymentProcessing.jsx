@@ -8,6 +8,11 @@ import { PAYMENT_WORKFLOW } from "../config/constants";
 import SearchableSelect from "../components/SearchableSelect.jsx";
 import BulkUtrModal from "../components/BulkUtrModal.jsx";
 import { gstTypeLabel } from "../utils/gst";
+// Nov 2026 — switch to the Doctor Referral / Surgeon payment screen.
+import {
+  PaymentKindSwitch,
+  VIEW_ROLES as DOCTOR_PAYMENT_VIEW_ROLES,
+} from "../components/doctorPayoutUi.jsx";
 
 // Rows per page. All-time data is served page by page, never in one payload.
 const PAGE_SIZE = 20;
@@ -728,11 +733,19 @@ export default function PaymentProcessing() {
     <div style={S.layout}>
       <Sidebar />
       <main style={S.main}>
-        <div style={S.topBar}>
+        <div style={{ ...S.topBar, gap: 16, flexWrap: "wrap" }}>
           <div>
             <h1 style={S.title}>💳 Payment Processing</h1>
             <p style={S.sub}>Raise and track payments for approved invoices</p>
           </div>
+          {/* Nov 2026 — Doctor Referral / Surgeon payments live on their
+              own screen; this switch moves between the three. */}
+          {DOCTOR_PAYMENT_VIEW_ROLES.includes(authUser?.role) && (
+            <PaymentKindSwitch
+              active="vendor"
+              onPick={(kind) => navigate(`/doctor-payments?type=${kind}`)}
+            />
+          )}
         </div>
 
         {error && (

@@ -1,6 +1,8 @@
 # Uploaded files — stored on server only
 uploads/
 
+private_uploads/
+
 # OSX
 #
 .DS_Store

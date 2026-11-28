@@ -6,6 +6,11 @@
 // vouchers with anything to check, then download the Excel. Downloaded
 // records are marked exported and skipped next time unless
 // "Include already exported" is ticked.
+//
+// Nov 2026 — two separate lists, chosen with the switch at the top:
+//   Invoices & credit notes   /api/tally/preview          /api/tally/export
+//   Doctor payments           /api/tally/doctors/preview  /api/tally/doctors/export
+// Each has its own preview, its own download and its own "exported" marks.
 // ============================================================
 import React, { useState, useEffect } from "react";
 import api from "../api/axios";
@@ -26,7 +31,36 @@ const TYPE_STYLE = {
   "Debit Note": { bg: "#fef2f2", color: "#b91c1c" },
 };
 
+// The two lists this screen can export.
+const SOURCES = {
+  invoices: {
+    label: "Invoices & credit notes",
+    path: "/tally",
+    sub: "Accounts-approved invoices (Journal / Purchase) and approved credit notes (Debit Note) in TallyPrime import format — one branch per file.",
+    party: "Vendor",
+    ref: "Vendor Ref / Date",
+    file: "Tally",
+  },
+  doctors: {
+    label: "Doctor payments",
+    path: "/tally/doctors",
+    sub: "Doctor Referral and Surgeon payments approved by the Cluster / Department Head — one Journal per record, in the same TallyPrime import format. One branch per file.",
+    party: "Doctor",
+    ref: "Upload / Sheet date",
+    file: "Tally_Doctors",
+  },
+};
+const PAYOUT_TYPE = { referral: "Referral", surgeon: "Surgeon" };
+
 export default function TallyExport() {
+  // ?source=doctors opens the doctor list directly (Doctor Payments overview).
+  const [source, setSource] = useState(() =>
+    new URLSearchParams(window.location.search).get("source") === "doctors"
+      ? "doctors"
+      : "invoices",
+  );
+  const src = SOURCES[source];
+  const isDoctors = source === "doctors";
   const [branches, setBranches] = useState([]);
   const [branch, setBranch] = useState("");
   const [from, setFrom] = useState(monthStart());
@@ -64,7 +98,7 @@ export default function TallyExport() {
     setError("");
     setNotice("");
     try {
-      const { data } = await api.get(`/tally/preview?${params()}`);
+      const { data } = await api.get(`${src.path}/preview?${params()}`);
       setData(data);
       setOpen({});
     } catch (err) {
@@ -80,13 +114,14 @@ export default function TallyExport() {
     setError("");
     try {
       const res = await api.post(
-        "/tally/export",
+        `${src.path}/export`,
         { branch, from, to, includeExported },
         { responseType: "blob" },
       );
       const cd = res.headers?.["content-disposition"] || "";
       const name =
-        /filename="?([^";]+)"?/i.exec(cd)?.[1] || `Tally_${from}_to_${to}.xlsx`;
+        /filename="?([^";]+)"?/i.exec(cd)?.[1] ||
+        `${src.file}_${from}_to_${to}.xlsx`;
       const url = window.URL.createObjectURL(
         new Blob([res.data], {
           type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -124,12 +159,31 @@ export default function TallyExport() {
         <div style={S.header}>
           <div>
             <h1 style={S.title}>Tally Export</h1>
-            <div style={S.sub}>
-              Accounts-approved invoices (Journal / Purchase) and approved
-              credit notes (Debit Note) in TallyPrime import format — one branch
-              per file.
-            </div>
+            <div style={S.sub}>{src.sub}</div>
           </div>
+        </div>
+
+        {/* Which list — each keeps its own preview and download */}
+        <div style={S.sourceBar}>
+          {Object.entries(SOURCES).map(([key, cfg]) => (
+            <button
+              key={key}
+              style={{
+                ...S.sourceBtn,
+                ...(source === key ? S.sourceBtnOn : {}),
+              }}
+              onClick={() => {
+                if (source === key) return;
+                setSource(key);
+                setData(null);
+                setOpen({});
+                setError("");
+                setNotice("");
+              }}
+            >
+              {cfg.label}
+            </button>
+          ))}
         </div>
 
         <div style={S.filters}>
@@ -206,9 +260,19 @@ export default function TallyExport() {
         {s && (
           <div style={S.stats}>
             <Stat label="Vouchers" value={s.vouchers} />
-            <Stat label="Journal" value={s.journal} />
-            <Stat label="Purchase" value={s.purchase} />
-            <Stat label="Debit Note" value={s.debitNote} />
+            {isDoctors ? (
+              <>
+                <Stat label="Referral" value={s.referral} />
+                <Stat label="Surgeon" value={s.surgeon} />
+                <Stat label="Amount" value={inr(s.amount)} />
+              </>
+            ) : (
+              <>
+                <Stat label="Journal" value={s.journal} />
+                <Stat label="Purchase" value={s.purchase} />
+                <Stat label="Debit Note" value={s.debitNote} />
+              </>
+            )}
             <Stat
               label="To check"
               value={s.withWarnings}
@@ -217,6 +281,15 @@ export default function TallyExport() {
             {includeExported && (
               <Stat label="Already exported" value={s.alreadyExported} />
             )}
+          </div>
+        )}
+
+        {isDoctors && data?.ledgers && (
+          <div style={S.ledgerNote}>
+            Expense ledgers used: <strong>{data.ledgers.referral}</strong>{" "}
+            (referral) and <strong>{data.ledgers.surgeon}</strong> (surgeon).
+            The doctor ledger is the doctor's name as in the Doctor Master.
+            These must exist in the branch's Tally company.
           </div>
         )}
 
@@ -235,9 +308,9 @@ export default function TallyExport() {
                   <th style={S.th}>Voucher No.</th>
                   <th style={S.th}>Type</th>
                   <th style={S.th}>Date</th>
-                  <th style={S.th}>Vendor Ref / Date</th>
-                  <th style={S.th}>Vendor</th>
-                  <th style={S.th}>GST</th>
+                  <th style={S.th}>{src.ref}</th>
+                  <th style={S.th}>{src.party}</th>
+                  <th style={S.th}>{isDoctors ? "For" : "GST"}</th>
                   <th style={S.thR}>Amount</th>
                   <th style={S.th}>Check</th>
                 </tr>
@@ -282,7 +355,11 @@ export default function TallyExport() {
                         </td>
                         <td style={S.td}>{v.vendorName}</td>
                         <td style={S.td}>
-                          {v.gstType === "CGST_SGST" ? "CGST+SGST" : "IGST"}
+                          {isDoctors
+                            ? PAYOUT_TYPE[v.payoutType] || v.payoutType
+                            : v.gstType === "CGST_SGST"
+                              ? "CGST+SGST"
+                              : "IGST"}
                         </td>
                         <td style={S.tdR}>{inr(v.drTotal)}</td>
                         <td style={S.td}>
@@ -358,6 +435,38 @@ const S = {
   header: { marginBottom: 18 },
   title: { fontSize: 22, fontWeight: 700, color: "#1a3c6e", margin: 0 },
   sub: { fontSize: 13, color: "#64748b", marginTop: 4 },
+  sourceBar: {
+    display: "inline-flex",
+    background: "#e2e8f0",
+    borderRadius: 10,
+    padding: 3,
+    gap: 2,
+    marginBottom: 14,
+  },
+  sourceBtn: {
+    border: "none",
+    background: "none",
+    padding: "7px 16px",
+    borderRadius: 8,
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#475569",
+    cursor: "pointer",
+  },
+  sourceBtnOn: {
+    background: "#fff",
+    color: "#1a3c6e",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.12)",
+  },
+  ledgerNote: {
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    color: "#1e40af",
+    borderRadius: 8,
+    padding: "9px 14px",
+    fontSize: 12.5,
+    marginBottom: 12,
+  },
   filters: {
     display: "flex",
     gap: 12,

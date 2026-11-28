@@ -1,6 +1,8 @@
 // ============================================================
 // FRONTEND: src/components/Sidebar.jsx  —  REPLACE WHOLE FILE
 // Vendor Master, Phase 2: one nav item above "Vendors".
+// Nov 2026 — one "Doctor Payments" entry (overview screen); nav items may
+// list sub-screen paths in `match` so the entry stays highlighted there.
 // ============================================================
 import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -33,6 +35,18 @@ const navItems = [
     path: "/credit-notes",
     icon: "🧾",
     roles: ["branch_user", "accounts", "super_admin"],
+  },
+  // Doctor Referral + Surgeon payments — Nov 2026.
+  // ONE entry: it opens the overview (pages/DoctorHub.jsx), which links to
+  // upload & approvals, referral / surgeon payments, the Doctor Master,
+  // the doctor TDS report and the doctor Tally export. `match` lists the
+  // other doctor screens so this entry stays lit on all of them.
+  {
+    label: "Doctor Payments",
+    path: "/doctor-hub",
+    match: ["/doctor-payouts", "/doctor-payments", "/doctors"],
+    icon: "🩺",
+    roles: ["accounts", "super_admin", "cluster_head", "director"],
   },
   // ✅ Vendor Master — group-level record per PAN (req 6: accounts/admin)
   {
@@ -116,12 +130,16 @@ export default function Sidebar() {
 
   // Longest matching path wins. A plain startsWith lights up both
   // "/reports" and "/reports/primary" when you're on the latter.
+  // An item may also claim other paths through `match` (its sub-screens).
   const activePath = visible
-    .map((i) => i.path)
-    .filter(
-      (p) => location.pathname === p || location.pathname.startsWith(p + "/"),
+    .flatMap((i) =>
+      [i.path, ...(i.match || [])].map((p) => ({ p, own: i.path })),
     )
-    .sort((a, b) => b.length - a.length)[0];
+    .filter(
+      ({ p }) =>
+        location.pathname === p || location.pathname.startsWith(p + "/"),
+    )
+    .sort((a, b) => b.p.length - a.p.length)[0]?.own;
 
   return (
     <aside style={styles.sidebar}>

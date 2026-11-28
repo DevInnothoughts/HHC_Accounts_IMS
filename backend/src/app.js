@@ -1,6 +1,8 @@
 // ============================================================
 // BACKEND: src/app.js  —  REPLACE WHOLE FILE
 // Change: one new mount, /api/vendor-masters, after /api/vendors.
+// Nov 2026: three mounts for doctor payouts — /api/doctors,
+// /api/doctor-payouts, /api/doctor-payments (after /api/tally).
 // ============================================================
 const express = require("express");
 const cors = require("cors");
@@ -127,6 +129,11 @@ const startServer = async () => {
   app.use("/api/credit-notes", require("./routes/creditNotes"));
   // Tally import file (Nov 2026) — router applies authenticate itself.
   app.use("/api/tally", require("./routes/tally"));
+  // Doctor Referral + Surgeon payouts (Nov 2026) — routers apply
+  // authenticate themselves.
+  app.use("/api/doctors", require("./routes/doctors"));
+  app.use("/api/doctor-payouts", require("./routes/doctorPayouts"));
+  app.use("/api/doctor-payments", require("./routes/doctorPayments"));
 
   const { initSLAScheduler } = require("./jobs/slaScheduler");
   await initSLAScheduler();
